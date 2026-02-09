@@ -5,6 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/server.ts",
+    "fix-port": "lsof -ti:3000 | xargs kill -9 2>/dev/null || true; echo 'Port 3000 freed. Run: npm run dev'",
     "build": "tsc",
     "start": "node dist/server.js",
     "migrate": "sequelize-cli db:migrate",

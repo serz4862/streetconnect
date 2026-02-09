@@ -36,29 +36,38 @@ export const authenticate = async (
     // Verify JWT
     const decoded = jwt.verify(token, config.jwt.secret) as {
       userId: string;
-      phone: string;
+      phone?: string;
       role: string;
     };
 
-    // Check cache for user
-    let user: Record<string, unknown> | null = await RedisCache.get<Record<string, unknown>>(`user:${decoded.userId}`);
+    // Resolve user by phone (source of truth) or fallback to userId for old tokens
+    let dbUser;
+    if (decoded.phone) {
+      // New tokens: resolve by phone (source of truth)
+      dbUser = await User.findOne({
+        where: { phone: decoded.phone },
+      });
+    } else {
+      // Old tokens: resolve by userId (legacy)
+      dbUser = await User.findByPk(decoded.userId);
+    }
 
+    if (!dbUser || !dbUser.get('is_active')) {
+      res.status(401).json({ error: 'User not found or inactive - please log in again' });
+      return;
+    }
+
+    const userId = dbUser.get('id') as string;
+    let user: Record<string, unknown> | null = await RedisCache.get<Record<string, unknown>>(`user:${userId}`);
     if (!user) {
-      // Fetch from database
-      const dbUser = await User.findByPk(decoded.userId);
-      if (!dbUser || !dbUser.is_active) {
-        res.status(401).json({ error: 'User not found or inactive' });
-        return;
-      }
       user = dbUser.toJSON() as unknown as Record<string, unknown>;
-      // Cache user
-      await RedisCache.set(`user:${decoded.userId}`, user, 3600);
+      await RedisCache.set(`user:${userId}`, user, 3600);
     }
 
     req.user = {
-      id: decoded.userId,
-      phone: decoded.phone,
-      role: decoded.role,
+      id: userId,
+      phone: dbUser.get('phone') as string,
+      role: (dbUser.get('role') as string) ?? decoded.role,
     };
 
     next();

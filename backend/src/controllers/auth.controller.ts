@@ -62,13 +62,13 @@ export class AuthController {
       } else {
         throw new AppError('User not found', 404);
       }
-    } else if (!user.is_active) {
-      throw new AppError('User account is inactive', 403);
-    }
-
-    if (!isNewUser) {
-      user.last_active_at = new Date();
-      await user.save();
+    } else {
+      // All existing users can log in; ensure they are marked active (fixes legacy or manual DB false)
+      await user.update({
+        is_active: true,
+        last_active_at: new Date(),
+      });
+      await user.reload();
     }
 
     const token = jwt.sign(
@@ -87,16 +87,18 @@ export class AuthController {
       await RedisCache.geoadd('users:locations', user.longitude, user.latitude, user.id);
     }
 
+    const userPayload = {
+      id: user.get('id'),
+      phone: user.get('phone'),
+      name: user.get('name'),
+      role: user.get('role'),
+      avatar_url: user.get('avatar_url'),
+      onboarding_completed: user.get('onboarding_completed'),
+    };
+
     res.json({
       message: isNewUser ? 'Account created successfully' : 'Login successful',
-      user: {
-        id: user.id,
-        phone: user.phone,
-        name: user.name,
-        role: user.role,
-        avatar_url: user.avatar_url,
-        onboarding_completed: user.onboarding_completed,
-      },
+      user: userPayload,
       token,
     });
   }

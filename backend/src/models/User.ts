@@ -25,48 +25,65 @@ interface UserAttributes {
   phone: string;
   country_code: string;
   name: string;
-  email?: string;
-  avatar_url?: string;
+  email: string | null;
+  avatar_url: string | null;
   role: UserRole;
-  country?: string;
-  city?: string;
-  pincode?: string;
-  latitude?: number;
-  longitude?: number;
-  location_name?: string;
-  firebase_uid?: string;
+  country: string | null;
+  city: string | null;
+  pincode: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_name: string | null;
+  firebase_uid: string | null;
   is_active: boolean;
   is_verified: boolean;
   onboarding_completed: boolean;
-  last_active_at?: Date;
+  last_active_at: Date | null;
   created_at?: Date;
   updated_at?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'is_active' | 'is_verified' | 'onboarding_completed'> {}
+interface UserCreationAttributes extends Optional<
+  UserAttributes,
+  | 'id'
+  | 'is_active'
+  | 'is_verified'
+  | 'onboarding_completed'
+  | 'email'
+  | 'avatar_url'
+  | 'country'
+  | 'city'
+  | 'pincode'
+  | 'latitude'
+  | 'longitude'
+  | 'location_name'
+  | 'firebase_uid'
+  | 'last_active_at'
+> {}
 
+// Do not declare public class fields for attributes - they shadow Sequelize getters/setters.
+// Use user.get('field') or TypeScript will still allow attribute access via Model.
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
-  public id!: string;
-  public phone!: string;
-  public country_code!: string;
-  public name!: string;
-  public email?: string;
-  public avatar_url?: string;
-  public role!: UserRole;
-  public country?: string;
-  public city?: string;
-  public pincode?: string;
-  public latitude?: number;
-  public longitude?: number;
-  public location_name?: string;
-  public firebase_uid?: string;
-  public is_active!: boolean;
-  public is_verified!: boolean;
-  public onboarding_completed!: boolean;
-  public last_active_at?: Date;
-
-  public readonly created_at!: Date;
-  public readonly updated_at!: Date;
+  declare id: string;
+  declare phone: string;
+  declare country_code: string;
+  declare name: string;
+  declare email: string | null;
+  declare avatar_url: string | null;
+  declare role: UserRole;
+  declare country: string | null;
+  declare city: string | null;
+  declare pincode: string | null;
+  declare latitude: number | null;
+  declare longitude: number | null;
+  declare location_name: string | null;
+  declare firebase_uid: string | null;
+  declare is_active: boolean;
+  declare is_verified: boolean;
+  declare onboarding_completed: boolean;
+  declare last_active_at: Date | null;
+  declare readonly created_at: Date;
+  declare readonly updated_at: Date;
 }
 
 User.init(

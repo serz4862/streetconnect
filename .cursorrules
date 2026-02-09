@@ -3,6 +3,15 @@
 ## Project Overview
 Production-grade dog welfare mobile application built with React Native (Expo) + Node.js backend.
 
+## Onboarding Flow Order (CRITICAL)
+
+After login, the onboarding flow MUST follow this order:
+1. **Location screen**: Request permission, get current location, call `updateLocation`
+2. **Role selection screen**: Pick one option from each category (citizen, rescue, professional), call `updateRole` and `completeOnboarding`
+3. **Redirect to home** with dogs visible, QR scanning, and reports working
+
+Phone number is the source of truth for user identity. Do not change this order without user confirmation.
+
 ## Core Tech Stack
 
 ### Frontend

@@ -9,12 +9,14 @@ const updateProfileSchema = z.object({
   name: z.string().min(2).max(100).optional(),
   email: z.string().email().optional(),
   avatar_url: z.string().url().optional(),
+  role: z.nativeEnum(UserRole).optional(),
   country: z.string().optional(),
   city: z.string().optional(),
   pincode: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
   location_name: z.string().optional(),
+  onboarding_completed: z.boolean().optional(),
 });
 
 const updateRoleSchema = z.object({
