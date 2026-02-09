@@ -1,0 +1,224 @@
+# StreetConnect - Cursor AI Rules
+
+## Project Overview
+Production-grade dog welfare mobile application built with React Native (Expo) + Node.js backend.
+
+## Core Tech Stack
+
+### Frontend
+- React Native + Expo (latest stable)
+- TypeScript (strict mode)
+- Expo Router (file-based navigation)
+- TanStack Query (React Query) for server state
+- Zustand for global state
+- React Hook Form + Zod for forms/validation
+- Google Maps, Expo Location, Camera, Barcode Scanner
+
+### Backend
+- Node.js + Express + TypeScript
+- PostgreSQL + Sequelize ORM
+- Redis for caching & optimization
+- Firebase Admin (auth)
+- AWS S3 (signed URLs for uploads)
+- Pusher (real-time chat)
+- Docker
+
+## Code Standards
+
+### TypeScript
+- **STRICT MODE ALWAYS**
+- Explicit types for all function parameters and return values
+- No `any` type unless absolutely necessary
+- Use interfaces for objects, types for unions
+- Enable all strict compiler options
+
+### Performance Rules (CRITICAL)
+- **Zero unnecessary re-renders**
+- Use `React.memo()` for all list items and cards
+- Use `useCallback` for all callbacks passed to child components
+- Use `useMemo` for expensive computations
+- Implement `FlatList` with:
+  - `getItemLayout` for known item heights
+  - `windowSize` prop (default: 10)
+  - `maxToRenderPerBatch` (default: 5)
+  - `removeClippedSubviews={true}`
+- Cache API responses with React Query (5-60min staleTime)
+- Use Redis geospatial queries for location-based features
+- Optimize images (use expo-fast-image, set appropriate sizes)
+- Lazy load screens and heavy components
+
+### Component Structure
+- **One component per file**
+- Small, focused components (< 150 lines)
+- Extract logic to custom hooks
+- Co-locate styles with components
+- Use functional components only
+- Props interface defined at top
+
+### Naming Conventions
+- Components: PascalCase (`DogCard.tsx`)
+- Hooks: camelCase starting with `use` (`useDogs.ts`)
+- Files: camelCase for utils, PascalCase for components
+- Constants: UPPER_SNAKE_CASE
+- API endpoints: kebab-case
+
+### File Organization
+```
+src/
+├── app/              # Expo Router screens
+├── components/       # Reusable components
+│   ├── common/       # Generic UI components
+│   ├── dog/          # Dog-specific components
+│   └── chat/         # Chat components
+├── features/         # Feature modules
+├── hooks/            # Custom hooks
+├── services/         # API, Firebase, etc.
+├── store/            # Zustand stores
+├── types/            # TypeScript types
+├── constants/        # Constants & config
+└── utils/            # Utility functions
+```
+
+### State Management
+- **Server State**: React Query ONLY
+- **Global State**: Zustand (auth, location, theme)
+- **Local State**: useState, useReducer
+- **Form State**: React Hook Form
+- **NO Redux, NO Context for data**
+
+### API Layer
+- All API calls in `services/api.ts`
+- Use React Query hooks in `hooks/`
+- Handle errors at hook level
+- Show loading states everywhere
+- Implement retry logic for failed requests
+
+### Validation
+- Zod schemas for all forms
+- Validate on backend AND frontend
+- Clear error messages
+- Field-level validation feedback
+
+### Accessibility
+- All touchable elements: minimum 44x44 hit area
+- Meaningful accessibility labels
+- Support for screen readers
+- Proper color contrast
+
+### Error Handling
+- Try-catch in all async functions
+- User-friendly error messages
+- Log errors to console (dev) or service (prod)
+- Graceful degradation
+
+### Git Commit Messages
+Format: `type(scope): message`
+- feat: New feature
+- fix: Bug fix
+- perf: Performance improvement
+- refactor: Code refactoring
+- style: UI/styling changes
+- docs: Documentation
+- test: Testing
+
+Example: `feat(dogs): add QR code scanning`
+
+## Anti-Patterns (NEVER DO)
+
+❌ Redux or MobX
+❌ Inline styles (use StyleSheet.create)
+❌ Direct DOM manipulation
+❌ Blocking the UI thread
+❌ Heavy computations in render
+❌ Missing keys in lists
+❌ Mutating state directly
+❌ Large bundle sizes
+❌ Unoptimized images
+❌ Missing loading states
+❌ console.log in production
+
+## Performance Targets
+
+- App startup: < 3 seconds
+- Screen transitions: 60 FPS
+- List scrolling: 60 FPS
+- API response handling: < 100ms UI update
+- Bundle size: < 20MB
+
+## Security Rules
+
+- Never commit .env files
+- All API keys in environment variables
+- Sanitize user inputs
+- Use signed URLs for S3 uploads
+- Validate all API responses
+- Implement rate limiting
+- Use HTTPS only
+
+## Testing
+
+- Unit tests for utilities
+- Integration tests for critical flows
+- E2E tests for main user journeys
+- Test on both iOS and Android
+- Test on different screen sizes
+
+## Documentation
+
+- JSDoc for complex functions
+- README for setup instructions
+- Inline comments for non-obvious code
+- API documentation for backend
+
+## Database
+
+- Use indexes for frequently queried fields
+- Optimize queries (select only needed fields)
+- Use connection pooling
+- Cache hot data in Redis
+- Use transactions for data integrity
+
+## Real-time Features
+
+- Pusher for chat messages
+- WebSocket for notifications
+- Optimistic UI updates
+- Handle connection loss gracefully
+
+## Mobile-Specific
+
+- Handle app backgrounding
+- Manage location permissions properly
+- Optimize battery usage
+- Support offline mode (where possible)
+- Handle different screen sizes
+
+## Code Review Checklist
+
+- [ ] TypeScript errors resolved
+- [ ] Performance optimized (memo, useCallback)
+- [ ] Loading states implemented
+- [ ] Error handling in place
+- [ ] Accessibility labels added
+- [ ] Responsive to different screens
+- [ ] No console warnings
+- [ ] Tests passing
+- [ ] Code follows conventions
+
+## When Suggesting Code
+
+1. Always use TypeScript
+2. Include proper error handling
+3. Add loading states
+4. Implement performance optimizations
+5. Follow the established patterns
+6. Keep components small and focused
+7. Use existing utilities/hooks
+
+## Priority Order
+
+1. Correctness
+2. Performance
+3. User experience
+4. Code quality
+5. Maintainability
