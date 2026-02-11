@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { z } from 'zod';
-import User, { UserRole } from '../models/User';
+import { UserRole } from '../models/User';
 import { config } from '../config';
 import { RedisCache } from '../config/redis';
 import firebaseService from '../services/firebase.service';
 import { AppError } from '../middleware/errorHandler';
+import { supabase } from '../services/supabase.service';
 
 const signupSchema = z.object({
   firebase_token: z.string(),
@@ -27,14 +28,14 @@ const loginSchema = z.object({
 });
 
 const phoneLoginSchema = z.object({
-  phone: z.string().min(10),
+  phone: z.string().min(10).max(15),
   country_code: z.string().min(1),
   otp: z.string().min(4).max(6),
   name: z.string().min(2).max(100).optional(),
   pincode: z.string().optional(),
 });
 
-const VALID_DEV_OTPS = ['0000', '000000'];
+const VALID_DEV_OTPS = ['0000', '000000']; // Dev OTPs for testing - both 4 and 6 zeros work
 
 export class AuthController {
   async phoneLogin(req: Request, res: Response): Promise<void> {
@@ -44,31 +45,61 @@ export class AuthController {
       throw new AppError('Invalid OTP', 401);
     }
 
-    let user = await User.findOne({ where: { phone: data.phone } });
+    // Normalize phone: DB stores "919735892566" for +91 9735892566
+    const phoneDigits = data.phone.replace(/\D/g, '');
+    const lookupPhone = phoneDigits.length === 10 && data.country_code === '+91' ? `91${phoneDigits}` : phoneDigits;
+
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', lookupPhone)
+      .maybeSingle();
+
+    let user = existingUser;
     let isNewUser = false;
 
     if (!user) {
       if (data.name) {
-        user = await User.create({
-          phone: data.phone,
-          country_code: data.country_code,
-          name: data.name,
-          role: UserRole.ANIMAL_LOVER,
-          pincode: data.pincode,
-          is_verified: true,
-          is_active: true,
-        });
+        const { data: newUser, error: createError } = await supabase
+          .from('users')
+          .insert({
+            phone: lookupPhone,
+            country_code: data.country_code,
+            name: data.name,
+            role: UserRole.ANIMAL_LOVER,
+            pincode: data.pincode,
+            is_verified: true,
+            is_active: true,
+          })
+          .select()
+          .single();
+
+        if (createError) {
+          throw new AppError(`Failed to create user: ${createError.message}`, 500);
+        }
+
+        user = newUser;
         isNewUser = true;
       } else {
         throw new AppError('User not found', 404);
       }
     } else {
-      // All existing users can log in; ensure they are marked active (fixes legacy or manual DB false)
-      await user.update({
-        is_active: true,
-        last_active_at: new Date(),
-      });
-      await user.reload();
+      // Update existing user to mark as active
+      const { data: updatedUser, error: updateError } = await supabase
+        .from('users')
+        .update({
+          is_active: true,
+          last_active_at: new Date().toISOString(),
+        })
+        .eq('id', user.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        throw new AppError(`Failed to update user: ${updateError.message}`, 500);
+      }
+
+      user = updatedUser;
     }
 
     const token = jwt.sign(
@@ -81,19 +112,19 @@ export class AuthController {
       { expiresIn: config.jwt.expiresIn } as SignOptions
     );
 
-    await RedisCache.set(`user:${user.id}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${user.id}`, JSON.stringify(user), 3600);
 
     if (user.latitude && user.longitude) {
       await RedisCache.geoadd('users:locations', user.longitude, user.latitude, user.id);
     }
 
     const userPayload = {
-      id: user.get('id'),
-      phone: user.get('phone'),
-      name: user.get('name'),
-      role: user.get('role'),
-      avatar_url: user.get('avatar_url'),
-      onboarding_completed: user.get('onboarding_completed'),
+      id: user.id,
+      phone: user.phone,
+      name: user.name,
+      role: user.role,
+      avatar_url: user.avatar_url,
+      onboarding_completed: user.onboarding_completed,
     };
 
     res.json({
@@ -110,28 +141,40 @@ export class AuthController {
     const decodedToken = await firebaseService.verifyIdToken(data.firebase_token);
 
     // Check if user already exists
-    let user = await User.findOne({ where: { phone: data.phone } });
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('phone', data.phone)
+      .maybeSingle();
 
-    if (user) {
+    if (existingUser) {
       throw new AppError('User already exists', 400);
     }
 
     // Create user
-    user = await User.create({
-      phone: data.phone,
-      country_code: data.country_code,
-      name: data.name,
-      role: data.role,
-      country: data.country,
-      city: data.city,
-      pincode: data.pincode,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      location_name: data.location_name,
-      firebase_uid: decodedToken.uid,
-      is_verified: true,
-      is_active: true,
-    });
+    const { data: user, error: createError } = await supabase
+      .from('users')
+      .insert({
+        phone: data.phone,
+        country_code: data.country_code,
+        name: data.name,
+        role: data.role,
+        country: data.country,
+        city: data.city,
+        pincode: data.pincode,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        location_name: data.location_name,
+        firebase_uid: decodedToken.uid,
+        is_verified: true,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (createError || !user) {
+      throw new AppError(`Failed to create user: ${createError?.message}`, 500);
+    }
 
     // Generate JWT
     const token = jwt.sign(
@@ -145,7 +188,7 @@ export class AuthController {
     );
 
     // Cache user
-    await RedisCache.set(`user:${user.id}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${user.id}`, JSON.stringify(user), 3600);
 
     // Update location in Redis for geospatial queries
     if (user.latitude && user.longitude) {
@@ -172,9 +215,13 @@ export class AuthController {
     const decodedToken = await firebaseService.verifyIdToken(data.firebase_token);
 
     // Find user
-    const user = await User.findOne({ where: { phone: data.phone } });
+    const { data: user, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone', data.phone)
+      .single();
 
-    if (!user) {
+    if (findError || !user) {
       throw new AppError('User not found', 404);
     }
 
@@ -182,39 +229,49 @@ export class AuthController {
       throw new AppError('User account is inactive', 403);
     }
 
-    // Update Firebase UID if changed
+    // Update Firebase UID if changed and last active
+    const updates: any = {
+      last_active_at: new Date().toISOString(),
+    };
+
     if (user.firebase_uid !== decodedToken.uid) {
-      user.firebase_uid = decodedToken.uid;
-      await user.save();
+      updates.firebase_uid = decodedToken.uid;
     }
 
-    // Update last active
-    user.last_active_at = new Date();
-    await user.save();
+    const { data: updatedUser, error: updateError } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', user.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw new AppError(`Failed to update user: ${updateError.message}`, 500);
+    }
 
     // Generate JWT
     const token = jwt.sign(
       {
-        userId: user.id,
-        phone: user.phone,
-        role: user.role,
+        userId: updatedUser.id,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
       },
       config.jwt.secret,
       { expiresIn: config.jwt.expiresIn } as SignOptions
     );
 
     // Cache user
-    await RedisCache.set(`user:${user.id}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${updatedUser.id}`, JSON.stringify(updatedUser), 3600);
 
     res.json({
       message: 'Login successful',
       user: {
-        id: user.id,
-        phone: user.phone,
-        name: user.name,
-        role: user.role,
-        avatar_url: user.avatar_url,
-        onboarding_completed: user.onboarding_completed,
+        id: updatedUser.id,
+        phone: updatedUser.phone,
+        name: updatedUser.name,
+        role: updatedUser.role,
+        avatar_url: updatedUser.avatar_url,
+        onboarding_completed: updatedUser.onboarding_completed,
       },
       token,
     });
@@ -245,9 +302,13 @@ export class AuthController {
         role: string;
       };
 
-      const user = await User.findByPk(decoded.userId);
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', decoded.userId)
+        .single();
 
-      if (!user || !user.is_active) {
+      if (error || !user || !user.is_active) {
         throw new AppError('User not found or inactive', 401);
       }
 

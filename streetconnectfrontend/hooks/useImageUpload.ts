@@ -19,7 +19,8 @@ export const useImageUpload = () => {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        // Use new API – array of MediaType strings to avoid deprecation warning
+        mediaTypes: ['images'],
         allowsEditing: options?.allowsEditing ?? true,
         aspect: options?.aspect ?? [4, 3],
         quality: options?.quality ?? 0.8,
@@ -49,6 +50,8 @@ export const useImageUpload = () => {
       }
 
       const result = await ImagePicker.launchCameraAsync({
+        // Explicitly restrict to images to match picker behaviour
+        mediaTypes: ['images'],
         allowsEditing: options?.allowsEditing ?? true,
         aspect: options?.aspect ?? [4, 3],
         quality: options?.quality ?? 0.8,

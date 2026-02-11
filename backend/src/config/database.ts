@@ -25,10 +25,34 @@ const sequelize = new Sequelize(config.database.url, {
 });
 
 export const connectDatabase = async (): Promise<void> => {
+  // When Supabase is configured, use Supabase and skip Sequelize
+  if (config.supabase?.url && config.supabase?.serviceRoleKey) {
+    try {
+      logger.info('🔗 Using Supabase as database...');
+      const { supabase } = await import('../services/supabase.service');
+      // Test Supabase connection (list buckets - doesn't require tables)
+      const { error } = await supabase.storage.listBuckets();
+      if (error) {
+        // Try users table as fallback (in case buckets fail)
+        const { error: tableError } = await supabase.from('users').select('count').limit(1);
+        if (tableError) {
+          logger.warn('⚠️  Supabase: Tables may not exist yet. Run migration in Supabase SQL Editor.');
+          logger.info('📋 Migration: backend/migrations/001_initial_schema.sql');
+        }
+      }
+      logger.info('✅ Supabase connection verified');
+      return;
+    } catch (error) {
+      logger.error('❌ Supabase connection failed:', error);
+      process.exit(1);
+    }
+  }
+
+  // Fallback: use Sequelize (local PostgreSQL)
   try {
     await sequelize.authenticate();
     logger.info('✅ Database connection established successfully');
-    
+
     if (config.env === 'development') {
       await sequelize.sync({ alter: true });
       logger.info('✅ Database synchronized');

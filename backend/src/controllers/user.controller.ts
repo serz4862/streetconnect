@@ -1,9 +1,10 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import User, { UserRole } from '../models/User';
+import { UserRole } from '../models/User';
 import { AuthRequest } from '../middleware/auth';
 import { RedisCache } from '../config/redis';
 import { AppError } from '../middleware/errorHandler';
+import { supabase } from '../services/supabase.service';
 
 const updateProfileSchema = z.object({
   name: z.string().min(2).max(100).optional(),
@@ -24,6 +25,44 @@ const updateRoleSchema = z.object({
 });
 
 export class UserController {
+  async getAllUsers(req: AuthRequest, res: Response): Promise<void> {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const search = req.query.search as string;
+    const role = req.query.role as string;
+
+    let query = supabase
+      .from('users')
+      .select('id, name, phone, role, avatar_url, city, location_name, is_verified', { count: 'exact' })
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,city.ilike.%${search}%,location_name.ilike.%${search}%`);
+    }
+
+    if (role) {
+      query = query.eq('role', role);
+    }
+
+    const { data: users, error, count } = await query
+      .range((page - 1) * limit, page * limit - 1);
+
+    if (error) {
+      throw new AppError(`Failed to fetch users: ${error.message}`, 500);
+    }
+
+    res.json({
+      users: users || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit),
+      },
+    });
+  }
+
   async getProfile(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
 
@@ -31,11 +70,16 @@ export class UserController {
     let user: any = await RedisCache.get(`user:${userId}`);
 
     if (!user) {
-      const dbUser = await User.findByPk(userId);
-      if (!dbUser) {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error || !data) {
         throw new AppError('User not found', 404);
       }
-      user = dbUser.toJSON();
+      user = data;
       await RedisCache.set(`user:${userId}`, user, 3600);
     }
 
@@ -46,17 +90,19 @@ export class UserController {
     const userId = req.user!.id;
     const data = updateProfileSchema.parse(req.body);
 
-    const user = await User.findByPk(userId);
-    if (!user) {
-      throw new AppError('User not found', 404);
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(data)
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      throw new AppError('Failed to update profile', 500);
     }
 
-    // Update fields
-    Object.assign(user, data);
-    await user.save();
-
     // Update cache
-    await RedisCache.set(`user:${userId}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${userId}`, user, 3600);
 
     // Update geolocation if changed
     if (data.latitude && data.longitude) {
@@ -65,7 +111,7 @@ export class UserController {
 
     res.json({
       message: 'Profile updated successfully',
-      user: user.toJSON(),
+      user,
     });
   }
 
@@ -73,40 +119,46 @@ export class UserController {
     const userId = req.user!.id;
     const data = updateRoleSchema.parse(req.body);
 
-    const user = await User.findByPk(userId);
-    if (!user) {
-      throw new AppError('User not found', 404);
+    const { data: user, error } = await supabase
+      .from('users')
+      .update({ role: data.role })
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      throw new AppError('Failed to update role', 500);
     }
 
-    user.role = data.role;
-    await user.save();
-
     // Update cache
-    await RedisCache.set(`user:${userId}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${userId}`, user, 3600);
 
     res.json({
       message: 'Role updated successfully',
-      user: user.toJSON(),
+      user,
     });
   }
 
   async completeOnboarding(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
 
-    const user = await User.findByPk(userId);
-    if (!user) {
-      throw new AppError('User not found', 404);
+    const { data: user, error } = await supabase
+      .from('users')
+      .update({ onboarding_completed: true })
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      throw new AppError('Failed to complete onboarding', 500);
     }
 
-    user.onboarding_completed = true;
-    await user.save();
-
     // Update cache
-    await RedisCache.set(`user:${userId}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${userId}`, user, 3600);
 
     res.json({
       message: 'Onboarding completed successfully',
-      user: user.toJSON(),
+      user,
     });
   }
 
@@ -117,15 +169,17 @@ export class UserController {
     let user: any = await RedisCache.get(`user:${id}`);
 
     if (!user) {
-      const dbUser = await User.findByPk(id, {
-        attributes: ['id', 'name', 'avatar_url', 'role', 'city', 'created_at'],
-      });
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, name, avatar_url, role, city, created_at')
+        .eq('id', id)
+        .single();
       
-      if (!dbUser) {
+      if (error || !data) {
         throw new AppError('User not found', 404);
       }
       
-      user = dbUser.toJSON();
+      user = data;
       await RedisCache.set(`user:${id}`, user, 3600);
     }
 
@@ -136,8 +190,13 @@ export class UserController {
     const userId = req.user!.id;
     const radius = parseInt(req.query.radius as string) || 5; // Default 5km
 
-    const user = await User.findByPk(userId);
-    if (!user || !user.latitude || !user.longitude) {
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('latitude, longitude')
+      .eq('id', userId)
+      .single();
+
+    if (userError || !user || !user.latitude || !user.longitude) {
       throw new AppError('User location not found', 404);
     }
 
@@ -151,15 +210,17 @@ export class UserController {
     );
 
     // Fetch user details
-    const users = await User.findAll({
-      where: {
-        id: nearbyUserIds,
-        is_active: true,
-      },
-      attributes: ['id', 'name', 'avatar_url', 'role', 'city', 'latitude', 'longitude'],
-    });
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('id, name, avatar_url, role, city, latitude, longitude')
+      .in('id', nearbyUserIds)
+      .eq('is_active', true);
 
-    res.json({ users });
+    if (error) {
+      throw new AppError('Failed to fetch nearby users', 500);
+    }
+
+    res.json({ users: users || [] });
   }
 
   async updateLocation(req: AuthRequest, res: Response): Promise<void> {
@@ -170,20 +231,24 @@ export class UserController {
       throw new AppError('Latitude and longitude required', 400);
     }
 
-    const user = await User.findByPk(userId);
-    if (!user) {
-      throw new AppError('User not found', 404);
+    const updates: any = { latitude, longitude };
+    if (location_name) {
+      updates.location_name = location_name;
     }
 
-    user.latitude = latitude;
-    user.longitude = longitude;
-    if (location_name) {
-      user.location_name = location_name;
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error || !user) {
+      throw new AppError('Failed to update location', 500);
     }
-    await user.save();
 
     // Update cache
-    await RedisCache.set(`user:${userId}`, user.toJSON(), 3600);
+    await RedisCache.set(`user:${userId}`, user, 3600);
 
     // Update geolocation
     await RedisCache.geoadd('users:locations', longitude, latitude, userId);

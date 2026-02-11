@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
-import s3Service from './s3.service';
+import { storageService } from './storage.service';
 import logger from '../utils/logger';
 
 class QRCodeService {
@@ -22,8 +22,8 @@ class QRCodeService {
         margin: 2,
       });
 
-      // Upload to S3
-      const qrCodeUrl = await s3Service.uploadBuffer(qrBuffer, 'qr', 'image/png');
+      // Upload to Supabase Storage
+      const qrCodeUrl = await storageService.uploadBuffer(qrBuffer, 'qr', 'image/png');
 
       return { qrCodeUrl, qrCodeId };
     } catch (error) {

@@ -13,7 +13,7 @@ import Button from '../../components/common/Button';
 import ErrorModal from '../../components/common/ErrorModal';
 import { colors } from '../../constants';
 
-const OTP_LENGTH = 4;
+const OTP_LENGTH = 6; // Support both 0000 and 000000 for testing
 const RESEND_COOLDOWN = 10;
 
 export default function VerifyOtpScreen() {
@@ -26,7 +26,7 @@ export default function VerifyOtpScreen() {
     flow: string;
   }>();
   const phoneLogin = useAuthStore((s) => s.phoneLogin);
-  const [otp, setOtp] = useState(['', '', '', '']);
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showErrorModal, setShowErrorModal] = useState(false);
@@ -70,7 +70,7 @@ export default function VerifyOtpScreen() {
   const handleVerify = useCallback(async () => {
     const code = otp.join('');
     if (code.length < 4) {
-      setError('Enter at least 4 digits (use 0000 for testing).');
+      setError('Enter at least 4 digits (use 0000 or 000000 for testing).');
       setShowErrorModal(true);
       return;
     }
@@ -94,6 +94,7 @@ export default function VerifyOtpScreen() {
     } catch (err: any) {
       let message = 'Verification failed. Please try again.';
       if (typeof err?.error === 'string') message = err.error;
+      else if (err?.error?.error) message = err.error.error;
       else if (err?.error?.message) message = err.error.message;
       else if (typeof err?.message === 'string') message = err.message;
       else if (typeof err === 'string') message = err;
@@ -134,9 +135,9 @@ export default function VerifyOtpScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>Verify your mobile number</Text>
         <Text style={styles.subtitle}>
-          Enter the 4-digit code we sent by SMS to {countryCode}-{phone}.
+          Enter the code we sent by SMS to {countryCode}-{phone}.
         </Text>
-        <Text style={styles.hint}>For testing, enter 0000</Text>
+        <Text style={styles.hint}>For testing, enter 0000 or 000000</Text>
 
         <View style={styles.otpRow}>
           {otp.map((digit, index) => (
@@ -152,7 +153,7 @@ export default function VerifyOtpScreen() {
                 }
               }}
               keyboardType="number-pad"
-              maxLength={index === 0 ? 6 : 1}
+              maxLength={index === 0 ? 8 : 1}
               selectTextOnFocus
               autoFocus={index === 0}
             />

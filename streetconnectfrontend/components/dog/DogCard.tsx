@@ -8,26 +8,28 @@ import {
 } from 'react-native';
 import { Dog } from '../../types';
 import { colors } from '../../constants';
-import { formatDistanceToNow } from 'date-fns';
+
+const CARD_IMAGE_SIZE = 76;
 
 interface DogCardProps {
   dog: Dog;
   onPress: (dog: Dog) => void;
 }
 
+function formatLastSeen(dog: Dog): string {
+  const at = dog.last_seen_at || dog.updated_at;
+  if (!at) return '—';
+  const d = new Date(at);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return '1d';
+  if (diffDays < 7) return `${diffDays}d`;
+  return `${Math.floor(diffDays / 7)}w`;
+}
+
 const DogCard = memo<DogCardProps>(({ dog, onPress }) => {
-  const handlePress = useCallback(() => {
-    onPress(dog);
-  }, [dog, onPress]);
-
-  const genderColor = dog.gender === 'male' ? colors.genderMale : 
-                     dog.gender === 'female' ? colors.genderFemale : 
-                     colors.genderUnknown;
-
-  const healthColor = dog.health_status === 'healthy' ? colors.statusHealthy :
-                     dog.health_status === 'sick' ? colors.statusSick :
-                     dog.health_status === 'injured' ? colors.statusInjured :
-                     colors.statusCritical;
+  const handlePress = useCallback(() => onPress(dog), [dog, onPress]);
 
   return (
     <TouchableOpacity
@@ -35,45 +37,39 @@ const DogCard = memo<DogCardProps>(({ dog, onPress }) => {
       onPress={handlePress}
       activeOpacity={0.7}
     >
-      <Image
-        source={{ uri: dog.image_url || 'https://via.placeholder.com/150' }}
-        style={styles.image}
-        resizeMode="cover"
-      />
+      <View style={styles.imageWrap}>
+        {dog.image_url ? (
+          <Image
+            source={{ uri: dog.image_url }}
+            style={styles.image}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={[styles.image, styles.imagePlaceholder]}>
+            <Text style={styles.placeholderEmoji}>🐕</Text>
+          </View>
+        )}
+      </View>
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.name}>{dog.name || 'Unnamed Dog'}</Text>
-          {dog.last_seen_at && (
-            <Text style={styles.lastSeen}>
-              {formatDistanceToNow(new Date(dog.last_seen_at), { addSuffix: true })}
-            </Text>
-          )}
+          <Text style={styles.name} numberOfLines={1}>{dog.name || 'Unnamed Dog'}</Text>
+          <Text style={styles.lastSeen}>Last seen {formatLastSeen(dog)}</Text>
         </View>
-        
         <View style={styles.tags}>
           {dog.color && (
-            <View style={[styles.tag, styles.colorTag]}>
+            <View style={[styles.tag, styles.tagColor]}>
               <Text style={styles.tagText}>{dog.color}</Text>
             </View>
           )}
-          <View style={[styles.tag, { backgroundColor: genderColor }]}>
-            <Text style={styles.tagTextWhite}>{dog.gender}</Text>
-          </View>
-          {dog.is_sterilized && (
-            <View style={[styles.tag, styles.sterilizedTag]}>
-              <Text style={styles.tagText}>Sterilized</Text>
+          {dog.gender && dog.gender !== 'unknown' && (
+            <View style={[styles.tag, styles.tagGender]}>
+              <Text style={styles.tagText}>{dog.gender === 'male' ? 'Male' : 'Female'}</Text>
             </View>
           )}
-        </View>
-
-        <View style={styles.footer}>
-          <View style={[styles.healthBadge, { backgroundColor: healthColor }]}>
-            <Text style={styles.healthText}>{dog.health_status}</Text>
-          </View>
-          {dog.last_fed_at && (
-            <Text style={styles.fedText}>
-              Fed {formatDistanceToNow(new Date(dog.last_fed_at), { addSuffix: true })}
-            </Text>
+          {dog.is_sterilized && (
+            <View style={[styles.tag, styles.tagSterilized]}>
+              <Text style={styles.tagText}>Sterilized</Text>
+            </View>
           )}
         </View>
       </View>
@@ -85,36 +81,54 @@ DogCard.displayName = 'DogCard';
 
 const styles = StyleSheet.create({
   container: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.card,
     borderRadius: 16,
     marginHorizontal: 16,
-    marginVertical: 8,
-    overflow: 'hidden',
-    elevation: 2,
+    marginVertical: 6,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    elevation: 1,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+  },
+  imageWrap: {
+    marginRight: 14,
   },
   image: {
-    width: '100%',
-    height: 200,
+    width: CARD_IMAGE_SIZE,
+    height: CARD_IMAGE_SIZE,
+    borderRadius: 14,
     backgroundColor: colors.surface,
   },
+  imagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderEmoji: {
+    fontSize: 36,
+  },
   content: {
-    padding: 16,
+    flex: 1,
+    minHeight: CARD_IMAGE_SIZE,
+    justifyContent: 'center',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   name: {
     fontSize: 18,
     fontWeight: '700',
     color: colors.text,
     flex: 1,
+    marginRight: 8,
   },
   lastSeen: {
     fontSize: 12,
@@ -123,50 +137,26 @@ const styles = StyleSheet.create({
   tags: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 12,
-    gap: 8,
+    gap: 6,
   },
   tag: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: colors.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
   },
-  colorTag: {
-    backgroundColor: colors.primaryLight,
+  tagColor: {
+    backgroundColor: '#FEF3C7',
   },
-  sterilizedTag: {
-    backgroundColor: colors.success + '20',
+  tagGender: {
+    backgroundColor: '#D1FAE5',
+  },
+  tagSterilized: {
+    backgroundColor: '#DBEAFE',
   },
   tagText: {
     fontSize: 12,
     fontWeight: '600',
     color: colors.text,
-  },
-  tagTextWhite: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textOnPrimary,
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  healthBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  healthText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textOnPrimary,
-    textTransform: 'capitalize',
-  },
-  fedText: {
-    fontSize: 12,
-    color: colors.textSecondary,
   },
 });
 
