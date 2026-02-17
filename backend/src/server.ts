@@ -50,6 +50,23 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
+// Health check endpoint (before auth middleware)
+app.get('/health', (_req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    version: config.apiVersion 
+  });
+});
+
+app.get(`/api/${config.apiVersion}/health`, (_req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    version: config.apiVersion 
+  });
+});
+
 // API routes
 app.use(`/api/${config.apiVersion}`, routes);
 
@@ -68,12 +85,16 @@ const startServer = async (): Promise<void> => {
       logger.warn('Firebase init failed (optional for dev):', err);
     }
 
-    // Connect to database
+    // Connect to database (Supabase or Sequelize)
     await connectDatabase();
 
-    // Test Redis connection
-    await redisClient.ping();
-    logger.info('✅ Redis connection verified');
+    // Test Redis connection (optional - app works without it)
+    try {
+      await redisClient.ping();
+      logger.info('✅ Redis connection verified');
+    } catch (err) {
+      logger.warn('⚠️ Redis not available - caching disabled. Start Redis for better performance.');
+    }
 
     // Start listening
     app.listen(config.port, () => {

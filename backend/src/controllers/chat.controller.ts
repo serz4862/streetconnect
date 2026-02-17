@@ -1,14 +1,11 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { Op } from 'sequelize';
-import Conversation from '../models/Conversation';
-import Message from '../models/Message';
-import User from '../models/User';
-import Notification, { NotificationType } from '../models/Notification';
 import { AuthRequest } from '../middleware/auth';
 import { RedisCache } from '../config/redis';
 import { AppError } from '../middleware/errorHandler';
 import pusherService from '../services/pusher.service';
+import { supabase } from '../services/supabase.service';
+import { NotificationType } from '../models/Notification';
 
 const sendMessageSchema = z.object({
   receiver_id: z.string().uuid(),
@@ -21,105 +18,177 @@ export class ChatController {
     const userId = req.user!.id;
     const data = sendMessageSchema.parse(req.body);
 
-    // Check if receiver exists
-    const receiver = await User.findByPk(data.receiver_id);
+    const { data: receiver } = await supabase.from('users').select('id').eq('id', data.receiver_id).single();
     if (!receiver) {
       throw new AppError('Receiver not found', 404);
     }
 
-    // Find or create conversation
-    let conversation = await Conversation.findOne({
-      where: {
-        [Op.or]: [
-          { user1_id: userId, user2_id: data.receiver_id },
-          { user1_id: data.receiver_id, user2_id: userId },
-        ],
-      },
-    });
+    const { data: convs } = await supabase
+      .from('conversations')
+      .select('*')
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`);
 
+    let conversation = (convs || []).find(
+      (c: any) =>
+        (c.user1_id === userId && c.user2_id === data.receiver_id) ||
+        (c.user1_id === data.receiver_id && c.user2_id === userId)
+    );
     if (!conversation) {
-      conversation = await Conversation.create({
-        user1_id: userId,
-        user2_id: data.receiver_id,
-        last_message: data.content,
-        last_message_at: new Date(),
-      });
+      const { data: newConv, error } = await supabase
+        .from('conversations')
+        .insert({
+          user1_id: userId,
+          user2_id: data.receiver_id,
+          last_message: data.content,
+          last_message_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error || !newConv) {
+        throw new AppError(`Failed to create conversation: ${error?.message}`, 500);
+      }
+      conversation = newConv;
     } else {
-      conversation.last_message = data.content;
-      conversation.last_message_at = new Date();
-      await conversation.save();
+      const { data: updated } = await supabase
+        .from('conversations')
+        .update({
+          last_message: data.content,
+          last_message_at: new Date().toISOString(),
+        })
+        .eq('id', conversation.id)
+        .select()
+        .single();
+      conversation = updated || conversation;
     }
 
-    // Create message
-    const message = await Message.create({
-      conversation_id: conversation.id,
-      sender_id: userId,
-      receiver_id: data.receiver_id,
-      content: data.content,
-      image_url: data.image_url,
-    });
+    const { data: message, error: msgError } = await supabase
+      .from('messages')
+      .insert({
+        conversation_id: conversation.id,
+        sender_id: userId,
+        receiver_id: data.receiver_id,
+        content: data.content,
+        image_url: data.image_url,
+      })
+      .select()
+      .single();
 
-    // Send via Pusher
-    await pusherService.sendMessage(conversation.id, {
-      id: message.id,
-      sender_id: userId,
-      receiver_id: data.receiver_id,
-      content: data.content,
-      image_url: data.image_url,
-      created_at: message.created_at,
-    });
+    if (msgError || !message) {
+      throw new AppError(`Failed to send message: ${msgError?.message}`, 500);
+    }
 
-    // Create notification for receiver
-    const notification = await Notification.create({
+    try {
+      await pusherService.sendMessage(conversation.id, {
+        id: message.id,
+        sender_id: userId,
+        receiver_id: data.receiver_id,
+        content: data.content,
+        image_url: data.image_url,
+        created_at: message.created_at,
+      });
+    } catch (_) {}
+
+    await supabase.from('notifications').insert({
       user_id: data.receiver_id,
       type: NotificationType.NEW_MESSAGE,
       title: 'New Message',
       message: `You have a new message from ${req.user!.phone}`,
-      data: {
-        conversation_id: conversation.id,
-        sender_id: userId,
-      },
+      data: { conversation_id: conversation.id, sender_id: userId },
     });
 
-    await pusherService.sendNotification(data.receiver_id, notification.toJSON());
-
-    // Invalidate cache
     await RedisCache.del(`conversations:${userId}`);
     await RedisCache.del(`conversations:${data.receiver_id}`);
 
     res.status(201).json({
       message: 'Message sent successfully',
-      data: message.toJSON(),
+      data: message,
+    });
+  }
+
+  /** GET /chat/conversations/or-create?receiver_id=xxx - get or create conversation with a user, returns conversation + messages */
+  async getOrCreateConversation(req: AuthRequest, res: Response): Promise<void> {
+    const userId = req.user!.id;
+    const receiverId = req.query.receiver_id as string;
+    if (!receiverId) {
+      throw new AppError('receiver_id is required', 400);
+    }
+
+    const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).single();
+    if (!receiver) {
+      throw new AppError('Receiver not found', 404);
+    }
+
+    const { data: convs } = await supabase
+      .from('conversations')
+      .select('*')
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`);
+
+    let conversation = (convs || []).find(
+      (c: any) =>
+        (c.user1_id === userId && c.user2_id === receiverId) ||
+        (c.user1_id === receiverId && c.user2_id === userId)
+    );
+
+    if (!conversation) {
+      const { data: newConv, error } = await supabase
+        .from('conversations')
+        .insert({
+          user1_id: userId,
+          user2_id: receiverId,
+          last_message: null,
+          last_message_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      if (error || !newConv) {
+        throw new AppError(`Failed to create conversation: ${error?.message}`, 500);
+      }
+      conversation = newConv;
+    }
+
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversation.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    res.json({
+      conversation_id: conversation.id,
+      conversation,
+      messages: messages || [],
     });
   }
 
   async getConversations(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
 
-    // Try cache first
     const cacheKey = `conversations:${userId}`;
-    let conversations = await RedisCache.get<Conversation[]>(cacheKey);
+    let conversations = await RedisCache.get<any[]>(cacheKey);
 
     if (!conversations) {
-      const dbConversations = await Conversation.findAll({
-        where: {
-          [Op.or]: [{ user1_id: userId }, { user2_id: userId }],
-        },
-        include: [
-          { model: User, as: 'user1', attributes: ['id', 'name', 'avatar_url'] },
-          { model: User, as: 'user2', attributes: ['id', 'name', 'avatar_url'] },
-        ],
-        order: [['last_message_at', 'DESC']],
-      });
+      const { data: convs, error } = await supabase
+        .from('conversations')
+        .select('*')
+        .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+        .order('last_message_at', { ascending: false });
 
-      conversations = dbConversations.map((c: any) => {
-        const conv = c.toJSON();
-        // Return the other user
-        conv.other_user = conv.user1_id === userId ? conv.user2 : conv.user1;
-        return conv;
-      });
+      if (error) {
+        throw new AppError(`Failed to fetch conversations: ${error.message}`, 500);
+      }
 
-      await RedisCache.set(cacheKey, conversations, 300); // 5 minutes
+      const list = convs || [];
+      const userIds = [...new Set(list.flatMap((c: any) => [c.user1_id, c.user2_id]))];
+      const { data: users } = await supabase.from('users').select('id, name, avatar_url').in('id', userIds);
+      const userMap = (users || []).reduce((acc: any, u) => { acc[u.id] = u; return acc; }, {});
+
+      conversations = list.map((c: any) => ({
+        ...c,
+        other_user: c.user1_id === userId ? userMap[c.user2_id] : userMap[c.user1_id],
+      }));
+
+      await RedisCache.set(cacheKey, conversations, 300);
     }
 
     res.json({ conversations });
@@ -131,8 +200,7 @@ export class ChatController {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
 
-    // Verify user is part of conversation
-    const conversation = await Conversation.findByPk(conversationId);
+    const { data: conversation } = await supabase.from('conversations').select('*').eq('id', conversationId).single();
     if (!conversation) {
       throw new AppError('Conversation not found', 404);
     }
@@ -141,33 +209,34 @@ export class ChatController {
       throw new AppError('Unauthorized access to conversation', 403);
     }
 
-    const messages = await Message.findAll({
-      where: { conversation_id: conversationId },
-      include: [
-        { model: User, as: 'sender', attributes: ['id', 'name', 'avatar_url'] },
-      ],
-      order: [['created_at', 'DESC']],
-      limit,
-      offset,
-    });
+    const { data: messages, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    const total = await Message.count({ where: { conversation_id: conversationId } });
+    const { count } = await supabase.from('messages').select('*', { count: 'exact', head: true }).eq('conversation_id', conversationId);
 
-    // Mark messages as read
-    await Message.update(
-      { is_read: true, read_at: new Date() },
-      {
-        where: {
-          conversation_id: conversationId,
-          receiver_id: userId,
-          is_read: false,
-        },
-      }
-    );
+    if (error) {
+      throw new AppError(`Failed to fetch messages: ${error.message}`, 500);
+    }
+
+    await supabase
+      .from('messages')
+      .update({ is_read: true, read_at: new Date().toISOString() })
+      .eq('conversation_id', conversationId)
+      .eq('receiver_id', userId)
+      .eq('is_read', false);
+
+    const msgList = messages || [];
+    const senderIds = [...new Set(msgList.map((m: any) => m.sender_id))];
+    const { data: senders } = await supabase.from('users').select('id, name, avatar_url').in('id', senderIds);
+    const senderMap = (senders || []).reduce((acc: any, s) => { acc[s.id] = s; return acc; }, {});
 
     res.json({
-      messages: messages.map((m: any) => m.toJSON()),
-      total,
+      messages: msgList.map((m: any) => ({ ...m, sender: senderMap[m.sender_id] })),
+      total: count ?? 0,
     });
   }
 
@@ -175,7 +244,7 @@ export class ChatController {
     const userId = req.user!.id;
     const { messageId } = req.params;
 
-    const message = await Message.findByPk(messageId);
+    const { data: message } = await supabase.from('messages').select('*').eq('id', messageId).single();
     if (!message) {
       throw new AppError('Message not found', 404);
     }
@@ -184,12 +253,14 @@ export class ChatController {
       throw new AppError('Unauthorized', 403);
     }
 
-    message.is_read = true;
-    message.read_at = new Date();
-    await message.save();
+    await supabase
+      .from('messages')
+      .update({ is_read: true, read_at: new Date().toISOString() })
+      .eq('id', messageId);
 
-    // Notify sender via Pusher
-    await pusherService.markMessageAsRead(message.conversation_id, messageId, userId);
+    try {
+      await pusherService.markMessageAsRead(message.conversation_id, messageId, userId);
+    } catch (_) {}
 
     res.json({ message: 'Message marked as read' });
   }
@@ -197,9 +268,8 @@ export class ChatController {
   async sendTypingIndicator(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
     const { conversationId } = req.params;
-    const { is_typing } = req.body;
 
-    const conversation = await Conversation.findByPk(conversationId);
+    const { data: conversation } = await supabase.from('conversations').select('*').eq('id', conversationId).single();
     if (!conversation) {
       throw new AppError('Conversation not found', 404);
     }
@@ -208,7 +278,10 @@ export class ChatController {
       throw new AppError('Unauthorized', 403);
     }
 
-    await pusherService.sendTypingIndicator(conversationId, userId, is_typing);
+    const { is_typing } = req.body;
+    try {
+      await pusherService.sendTypingIndicator(conversationId, userId, is_typing);
+    } catch (_) {}
 
     res.json({ message: 'Typing indicator sent' });
   }
@@ -216,14 +289,13 @@ export class ChatController {
   async getUnreadCount(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
 
-    const count = await Message.count({
-      where: {
-        receiver_id: userId,
-        is_read: false,
-      },
-    });
+    const { count } = await supabase
+      .from('messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('receiver_id', userId)
+      .eq('is_read', false);
 
-    res.json({ unread_count: count });
+    res.json({ unread_count: count ?? 0 });
   }
 }
 

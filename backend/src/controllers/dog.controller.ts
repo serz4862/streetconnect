@@ -1,14 +1,13 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { Op } from 'sequelize';
-import Dog, { DogGender, DogHealthStatus } from '../models/Dog';
-import DogCaretaker, { CaretakerType } from '../models/DogCaretaker';
-import User from '../models/User';
+import { DogGender, DogHealthStatus } from '../models/Dog';
+import { CaretakerType } from '../models/DogCaretaker';
 import { AuthRequest } from '../middleware/auth';
 import { RedisCache } from '../config/redis';
 import { AppError } from '../middleware/errorHandler';
 import qrcodeService from '../services/qrcode.service';
 import pdfService from '../services/pdf.service';
+import { supabase } from '../services/supabase.service';
 
 const createDogSchema = z.object({
   name: z.string().optional(),
@@ -29,27 +28,54 @@ const createDogSchema = z.object({
 
 const updateDogSchema = createDogSchema.partial();
 
+// Approximate degrees for radius (1 deg lat ≈ 111km, 5km ≈ 0.045)
+function getBoundingBox(lat: number, lng: number, radiusKm: number) {
+  const deg = radiusKm / 111;
+  return {
+    latMin: lat - deg,
+    latMax: lat + deg,
+    lngMin: lng - deg / Math.cos((lat * Math.PI) / 180),
+    lngMax: lng + deg / Math.cos((lat * Math.PI) / 180),
+  };
+}
+
 export class DogController {
   async createDog(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
     const data = createDogSchema.parse(req.body);
 
-    // Create dog
-    const dog = await Dog.create({
-      ...data,
-      created_by: userId,
-      last_seen_at: new Date(),
-    });
+    const { data: dog, error: createError } = await supabase
+      .from('dogs')
+      .insert({
+        ...data,
+        created_by: userId,
+        last_seen_at: new Date().toISOString(),
+        is_sterilized: data.is_sterilized ?? false,
+        health_status: data.health_status ?? 'unknown',
+        is_lost: false,
+        is_found: false,
+      })
+      .select()
+      .single();
+
+    if (createError || !dog) {
+      throw new AppError(`Failed to create dog: ${createError?.message}`, 500);
+    }
 
     // Generate QR code
     const { qrCodeUrl, qrCodeId } = await qrcodeService.generateDogQRCode(dog.id);
-    dog.qr_code_url = qrCodeUrl;
-    dog.qr_code_id = qrCodeId;
-    await dog.save();
+    const { error: updateError } = await supabase
+      .from('dogs')
+      .update({ qr_code_url: qrCodeUrl, qr_code_id: qrCodeId })
+      .eq('id', dog.id);
+
+    if (updateError) {
+      throw new AppError(`Failed to save QR code: ${updateError.message}`, 500);
+    }
 
     // Add creator as caretaker if specified
     if (data.caretaker_type) {
-      await DogCaretaker.create({
+      await supabase.from('dog_caretakers').insert({
         dog_id: dog.id,
         user_id: userId,
         caretaker_type: data.caretaker_type,
@@ -57,45 +83,52 @@ export class DogController {
       });
     }
 
-    // Add to geolocation cache
     await RedisCache.geoadd('dogs:locations', data.longitude, data.latitude, dog.id);
-
-    // Cache dog
-    await RedisCache.set(`dog:${dog.id}`, dog.toJSON(), 3600);
-
-    // Invalidate nearby dogs cache
+    await RedisCache.set(`dog:${dog.id}`, { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId }, 3600);
     await RedisCache.delPattern('dogs:nearby:*');
 
+    const finalDog = { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId };
     res.status(201).json({
       message: 'Dog created successfully',
-      dog: dog.toJSON(),
+      dog: finalDog,
     });
   }
 
   async getDogById(req: AuthRequest, res: Response): Promise<void> {
     const { id } = req.params;
 
-    // Try cache first
     let dog: any = await RedisCache.get(`dog:${id}`);
 
     if (!dog) {
-      const dbDog = await Dog.findByPk(id, {
-        include: [
-          { model: User, as: 'creator', attributes: ['id', 'name', 'avatar_url', 'phone', 'role'] },
-          {
-            model: User,
-            as: 'caretakers',
-            attributes: ['id', 'name', 'avatar_url', 'phone', 'role'],
-            through: { attributes: ['caretaker_type', 'is_primary'] },
-          },
-        ],
-      });
-
-      if (!dbDog) {
+      const { data: dogData, error } = await supabase.from('dogs').select('*').eq('id', id).single();
+      if (error || !dogData) {
         throw new AppError('Dog not found', 404);
       }
 
-      dog = dbDog.toJSON();
+      const { data: creator } = await supabase
+        .from('users')
+        .select('id, name, avatar_url, phone, role')
+        .eq('id', dogData.created_by)
+        .single();
+
+      const { data: caretakerRows } = await supabase
+        .from('dog_caretakers')
+        .select('caretaker_type, is_primary, user_id')
+        .eq('dog_id', id);
+
+      let caretakers: any[] = [];
+      if (caretakerRows?.length) {
+        const { data: caretakerUsers } = await supabase
+          .from('users')
+          .select('id, name, avatar_url, phone, role')
+          .in('id', caretakerRows.map((r: any) => r.user_id));
+        caretakers = (caretakerRows || []).map((dc: any) => {
+          const u = (caretakerUsers || []).find((u: any) => u.id === dc.user_id);
+          return { ...u, caretaker_type: dc.caretaker_type, is_primary: dc.is_primary };
+        });
+      }
+
+      dog = { ...dogData, creator, caretakers };
       await RedisCache.set(`dog:${id}`, dog, 3600);
     }
 
@@ -106,37 +139,34 @@ export class DogController {
     const { id } = req.params;
     const data = updateDogSchema.parse(req.body);
 
-    const dog = await Dog.findByPk(id);
-    if (!dog) {
+    const { data: dog, error } = await supabase
+      .from('dogs')
+      .update(data)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error || !dog) {
       throw new AppError('Dog not found', 404);
     }
 
-    // Update fields
-    Object.assign(dog, data);
-    await dog.save();
-
-    // Update cache
-    await RedisCache.set(`dog:${id}`, dog.toJSON(), 3600);
-
-    // Update geolocation if changed
+    await RedisCache.set(`dog:${id}`, dog, 3600);
     if (data.latitude && data.longitude) {
       await RedisCache.geoadd('dogs:locations', data.longitude, data.latitude, id);
     }
-
-    // Invalidate nearby dogs cache
     await RedisCache.delPattern('dogs:nearby:*');
 
     res.json({
       message: 'Dog updated successfully',
-      dog: dog.toJSON(),
+      dog,
     });
   }
 
   async getNearbyDogs(req: AuthRequest, res: Response): Promise<void> {
     const latitude = parseFloat(req.query.latitude as string);
     const longitude = parseFloat(req.query.longitude as string);
-    const radius = parseInt(req.query.radius as string) || 5; // Default 5km
-    const gender = req.query.gender as DogGender | undefined;
+    const radius = parseInt(req.query.radius as string) || 5;
+    const gender = req.query.gender as string | undefined;
     const color = req.query.color as string | undefined;
     const is_sterilized = req.query.is_sterilized === 'true' ? true : undefined;
 
@@ -144,48 +174,39 @@ export class DogController {
       throw new AppError('Latitude and longitude required', 400);
     }
 
-    // Create cache key
     const cacheKey = `dogs:nearby:${latitude}:${longitude}:${radius}:${gender}:${color}:${is_sterilized}`;
-
-    // Try cache first
-    let dogs = await RedisCache.get<Dog[]>(cacheKey);
+    let dogs = await RedisCache.get<any[]>(cacheKey);
 
     if (!dogs) {
-      // Get nearby dog IDs from Redis
-      const nearbyDogIds = await RedisCache.georadius(
-        'dogs:locations',
-        longitude,
-        latitude,
-        radius,
-        'km'
-      );
+      const box = getBoundingBox(latitude, longitude, radius);
+      let query = supabase
+        .from('dogs')
+        .select('*')
+        .gte('latitude', box.latMin)
+        .lte('latitude', box.latMax)
+        .gte('longitude', box.lngMin)
+        .lte('longitude', box.lngMax)
+        .order('last_seen_at', { ascending: false });
 
-      if (nearbyDogIds.length === 0) {
-        res.json({ dogs: [], total: 0 });
-        return;
+      if (gender) query = query.eq('gender', gender);
+      if (color) query = query.ilike('color', `%${color}%`);
+      if (is_sterilized !== undefined) query = query.eq('is_sterilized', is_sterilized);
+
+      const { data: dogList, error } = await query;
+
+      if (error) {
+        throw new AppError(`Failed to fetch dogs: ${error.message}`, 500);
       }
 
-      // Build query filters
-      const where: any = {
-        id: nearbyDogIds,
-      };
-
-      if (gender) where.gender = gender;
-      if (color) where.color = { [Op.iLike]: `%${color}%` };
-      if (is_sterilized !== undefined) where.is_sterilized = is_sterilized;
-
-      // Fetch dogs
-      const dbDogs = await Dog.findAll({
-        where,
-        include: [
-          { model: User, as: 'creator', attributes: ['id', 'name', 'avatar_url'] },
-        ],
-        order: [['last_seen_at', 'DESC']],
-      });
-
-      dogs = (dbDogs || []).map((d) => d.toJSON());
-
-      // Cache for 5 minutes
+      const rawDogs = dogList || [];
+      if (rawDogs.length) {
+        const creatorIds = [...new Set(rawDogs.map((d: any) => d.created_by))];
+        const { data: creators } = await supabase.from('users').select('id, name, avatar_url').in('id', creatorIds);
+        const creatorMap = (creators || []).reduce((acc: any, c) => { acc[c.id] = c; return acc; }, {});
+        dogs = rawDogs.map((d: any) => ({ ...d, creator: creatorMap[d.created_by] }));
+      } else {
+        dogs = [];
+      }
       await RedisCache.set(cacheKey, dogs, 300);
     }
 
@@ -208,32 +229,33 @@ export class DogController {
       throw new AppError('Invalid QR code', 400);
     }
 
-    const dog = await Dog.findByPk(verification.dogId, {
-      include: [
-        { model: User, as: 'creator', attributes: ['id', 'name', 'avatar_url', 'phone'] },
-        {
-          model: User,
-          as: 'caretakers',
-          attributes: ['id', 'name', 'avatar_url', 'phone'],
-          through: { attributes: ['caretaker_type', 'is_primary'] },
-        },
-      ],
-    });
-
-    if (!dog) {
+    const { data: dogData, error } = await supabase.from('dogs').select('*').eq('id', verification.dogId).single();
+    if (error || !dogData) {
       throw new AppError('Dog not found', 404);
     }
 
-    // Update last seen
-    dog.last_seen_at = new Date();
-    await dog.save();
+    await supabase
+      .from('dogs')
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq('id', verification.dogId);
 
-    // Update cache
-    await RedisCache.set(`dog:${dog.id}`, dog.toJSON(), 3600);
+    const { data: creator } = await supabase.from('users').select('id, name, avatar_url, phone').eq('id', dogData.created_by).single();
+    const { data: caretakerRows } = await supabase.from('dog_caretakers').select('caretaker_type, is_primary, user_id').eq('dog_id', verification.dogId);
+    let caretakers: any[] = [];
+    if (caretakerRows?.length) {
+      const { data: caretakerUsers } = await supabase.from('users').select('id, name, avatar_url, phone').in('id', caretakerRows.map((r: any) => r.user_id));
+      caretakers = (caretakerRows || []).map((dc: any) => {
+        const u = (caretakerUsers || []).find((u: any) => u.id === dc.user_id);
+        return { ...u, caretaker_type: dc.caretaker_type, is_primary: dc.is_primary };
+      });
+    }
+
+    const result = { ...dogData, creator, caretakers };
+    await RedisCache.set(`dog:${dogData.id}`, result, 3600);
 
     res.json({
       message: 'QR code scanned successfully',
-      dog: dog.toJSON(),
+      dog: result,
     });
   }
 
@@ -246,66 +268,82 @@ export class DogController {
       throw new AppError('Caretaker type required', 400);
     }
 
-    const dog = await Dog.findByPk(dogId);
+    const { data: dog } = await supabase.from('dogs').select('id').eq('id', dogId).single();
     if (!dog) {
       throw new AppError('Dog not found', 404);
     }
 
-    // Check if user is already a caretaker
-    const existing = await DogCaretaker.findOne({
-      where: { dog_id: dogId, user_id: userId },
-    });
+    const { data: existing } = await supabase
+      .from('dog_caretakers')
+      .select('id')
+      .eq('dog_id', dogId)
+      .eq('user_id', userId)
+      .maybeSingle();
 
     if (existing) {
-      existing.caretaker_type = caretaker_type;
-      await existing.save();
+      await supabase
+        .from('dog_caretakers')
+        .update({ caretaker_type })
+        .eq('dog_id', dogId)
+        .eq('user_id', userId);
     } else {
-      // Check limit for feeders (max 10 dogs)
       if (caretaker_type === CaretakerType.FEEDER || caretaker_type === CaretakerType.BOTH) {
-        const count = await DogCaretaker.count({
-          where: {
-            user_id: userId,
-            caretaker_type: [CaretakerType.FEEDER, CaretakerType.BOTH],
-          },
-        });
-
-        if (count >= 10) {
+        const { data: feederDogs } = await supabase
+          .from('dog_caretakers')
+          .select('id')
+          .eq('user_id', userId)
+          .or('caretaker_type.eq.feeder,caretaker_type.eq.both');
+        if ((feederDogs?.length ?? 0) >= 10) {
           throw new AppError('Maximum 10 dogs allowed per feeder', 400);
         }
       }
-
-      await DogCaretaker.create({
+      await supabase.from('dog_caretakers').insert({
         dog_id: dogId,
         user_id: userId,
         caretaker_type,
       });
     }
 
-    // Invalidate cache
     await RedisCache.del(`dog:${dogId}`);
-
     res.json({ message: 'Caretaker added successfully' });
   }
 
   async getMyDogs(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
 
-    const caretakerRecords = await DogCaretaker.findAll({
-      where: { user_id: userId },
-      include: [
-        {
-          model: Dog,
-          as: 'dog',
-          include: [{ model: User, as: 'creator', attributes: ['id', 'name', 'avatar_url'] }],
-        },
-      ],
-    });
+    const { data: records, error } = await supabase
+      .from('dog_caretakers')
+      .select('caretaker_type, is_primary, dog_id')
+      .eq('user_id', userId);
 
-    const dogs = caretakerRecords.map((record: any) => ({
-      ...record.dog.toJSON(),
-      my_caretaker_type: record.caretaker_type,
-      is_primary: record.is_primary,
-    }));
+    if (error) {
+      throw new AppError(`Failed to fetch dogs: ${error.message}`, 500);
+    }
+
+    if (!records?.length) {
+      res.json({ dogs: [] });
+      return;
+    }
+
+    const dogIds = records.map((r: any) => r.dog_id);
+    const { data: dogList } = await supabase
+      .from('dogs')
+      .select('*')
+      .in('id', dogIds);
+
+    const dogMap = (dogList || []).reduce((acc: any, d) => { acc[d.id] = d; return acc; }, {});
+    const creatorIds = [...new Set((dogList || []).map((d: any) => d.created_by))];
+    const { data: creators } = await supabase.from('users').select('id, name, avatar_url').in('id', creatorIds);
+    const creatorMap = (creators || []).reduce((acc: any, c) => { acc[c.id] = c; return acc; }, {});
+
+    const dogs = records
+      .filter((r: any) => dogMap[r.dog_id])
+      .map((record: any) => ({
+        ...dogMap[record.dog_id],
+        creator: creatorMap[dogMap[record.dog_id].created_by],
+        my_caretaker_type: record.caretaker_type,
+        is_primary: record.is_primary,
+      }));
 
     res.json({ dogs });
   }
@@ -313,7 +351,7 @@ export class DogController {
   async generateReport(req: AuthRequest, res: Response): Promise<void> {
     const { id } = req.params;
 
-    const dog = await Dog.findByPk(id);
+    const { data: dog } = await supabase.from('dogs').select('id').eq('id', id).single();
     if (!dog) {
       throw new AppError('Dog not found', 404);
     }
@@ -330,7 +368,7 @@ export class DogController {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    const dog = await Dog.findByPk(id);
+    const { data: dog } = await supabase.from('dogs').select('id, created_by').eq('id', id).single();
     if (!dog) {
       throw new AppError('Dog not found', 404);
     }
@@ -339,9 +377,7 @@ export class DogController {
       throw new AppError('Unauthorized to delete this dog', 403);
     }
 
-    await dog.destroy();
-
-    // Invalidate cache
+    await supabase.from('dogs').delete().eq('id', id);
     await RedisCache.del(`dog:${id}`);
     await RedisCache.delPattern('dogs:nearby:*');
 

@@ -4,7 +4,7 @@
 
 import { storage } from './storage';
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || '';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'http://localhost:3000/api/v1';
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
@@ -42,32 +42,40 @@ export const apiService = {
     request<any>('PUT', '/users/profile', { onboarding_completed: true }),
   updateRole: (role: string) =>
     request<any>('PUT', '/users/profile', { role }),
+  getAllUsers: (params?: any) =>
+    request<{ users: any[] }>('GET', `/users${params ? '?' + new URLSearchParams(params) : ''}`),
 
   // Dogs
   getNearbyDogs: (params: any) =>
     request<{ dogs: any[] }>('GET', `/dogs/nearby?${new URLSearchParams(params as any)}`),
-  getMyDogs: () => request<{ dogs: any[] }>('GET', '/dogs/mine'),
+  getMyDogs: () => request<{ dogs: any[] }>('GET', '/dogs/my-dogs'),
   getDogById: (id: string) => request<{ dog: any }>('GET', `/dogs/${id}`),
   createDog: (data: any) => request<any>('POST', '/dogs', data),
   updateDog: (id: string, data: any) => request<any>('PUT', `/dogs/${id}`, data),
   deleteDog: (id: string) => request<void>('DELETE', `/dogs/${id}`),
   scanQRCode: (qrData: string) => request<any>('POST', '/dogs/scan-qr', { qr_data: qrData }),
   addCaretaker: (dogId: string, caretakerType: string) =>
-    request<any>('POST', `/dogs/${dogId}/caretakers`, { caretaker_type: caretakerType }),
+    request<any>('POST', `/dogs/${dogId}/caretaker`, { caretaker_type: caretakerType }),
 
   // Chat
   getConversations: () => request<{ conversations: any[] }>('GET', '/chat/conversations'),
+  getOrCreateConversation: (receiverId: string) =>
+    request<{ conversation_id: string; conversation: any; messages: any[] }>(
+      'GET',
+      `/chat/conversations/or-create?receiver_id=${encodeURIComponent(receiverId)}`
+    ),
   getMessages: (conversationId: string, params?: any) =>
     request<{ messages: any[] }>('GET', `/chat/conversations/${conversationId}/messages?${params ? new URLSearchParams(params) : ''}`),
-  sendMessage: (data: any) => request<any>('POST', '/chat/messages', data),
+  sendMessage: (data: any) => request<any>('POST', '/chat/send', data),
   markMessageAsRead: (messageId: string) =>
-    request<void>('POST', `/chat/messages/${messageId}/read`),
+    request<void>('PUT', `/chat/messages/${messageId}/read`),
   getUnreadMessageCount: () => request<{ unread_count: number }>('GET', '/chat/unread-count'),
 
-  // Upload (stub – replace with real signed URL flow)
+  // Upload (Supabase signed URL flow)
   getSignedUploadUrl: (fileType: string, folder: string) =>
-    Promise.resolve({ upload_url: '', file_url: '' }),
-  uploadToS3: (_uploadUrl: string, _blob: Blob) => Promise.resolve(),
+    request<any>('POST', '/upload/signed-url', { file_type: fileType, folder }),
+  uploadToS3: (uploadUrl: string, blob: Blob) =>
+    fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': blob.type } }),
 
   // Reports
   createReport: (data: any) => request<any>('POST', '/reports', data),
@@ -75,8 +83,8 @@ export const apiService = {
   getNearbyReports: (params: any) =>
     request<{ reports: any[] }>('GET', `/reports/nearby?${new URLSearchParams(params as any)}`),
   getMyReports: (params?: any) =>
-    request<{ reports: any[] }>('GET', `/reports/mine?${params ? new URLSearchParams(params) : ''}`),
-  updateReport: (id: string, data: any) => request<any>('PATCH', `/reports/${id}`, data),
+    request<{ reports: any[] }>('GET', `/reports/my-reports?${params ? new URLSearchParams(params) : ''}`),
+  updateReport: (id: string, data: any) => request<any>('PUT', `/reports/${id}`, data),
   deleteReport: (id: string) => request<void>('DELETE', `/reports/${id}`),
 
   // Notifications
@@ -86,20 +94,20 @@ export const apiService = {
       `/notifications?${params ? new URLSearchParams(params) : ''}`
     ),
   markNotificationAsRead: (id: string) =>
-    request<void>('POST', `/notifications/${id}/read`),
-  markAllNotificationsAsRead: () => request<void>('POST', '/notifications/read-all'),
+    request<void>('PUT', `/notifications/${id}/read`),
+  markAllNotificationsAsRead: () => request<void>('PUT', '/notifications/mark-all-read'),
   deleteNotification: (id: string) => request<void>('DELETE', `/notifications/${id}`),
   getUnreadNotificationCount: () =>
     request<{ unread_count: number }>('GET', '/notifications/unread-count'),
 
   // Feed
-  logFeed: (data: any) => request<any>('POST', '/feed', data),
+  logFeed: (data: any) => request<any>('POST', '/feed/log', data),
   getMyFeedLogs: (params?: any) =>
-    request<{ feed_logs: any[] }>('GET', `/feed/mine?${params ? new URLSearchParams(params) : ''}`),
+    request<{ feed_logs: any[] }>('GET', `/feed/my-logs?${params ? new URLSearchParams(params) : ''}`),
   getDogFeedHistory: (dogId: string, params?: any) =>
     request<{ feed_logs: any[] }>(
       'GET',
       `/feed/dog/${dogId}?${params ? new URLSearchParams(params) : ''}`
     ),
-  getUnfedDogs: () => request<{ unfed_dogs: any[] }>('GET', '/feed/unfed'),
+  getUnfedDogs: () => request<{ unfed_dogs: any[] }>('GET', '/feed/unfed-dogs'),
 };

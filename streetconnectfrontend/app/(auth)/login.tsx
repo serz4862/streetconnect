@@ -63,7 +63,7 @@ export default function LoginScreen() {
             render={({ field: { onChange, onBlur, value } }) => (
               <Input
                 label="Mobile Number"
-                placeholder="97358 92566"
+                placeholder="99999 99999 (test: 9999999999)"
                 value={value}
                 onChangeText={(t) => onChange(t.replace(/\D/g, '').slice(0, 10))}
                 onBlur={onBlur}

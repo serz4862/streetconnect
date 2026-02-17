@@ -1,11 +1,10 @@
 import { formatDistanceToNow } from 'date-fns';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +16,7 @@ import { colors } from '../../../constants';
 import { useChat } from '../../../hooks/useChat';
 import { useAuthStore } from '../../../store/auth.store';
 import { Message } from '../../../types';
+import { apiService } from '../../../services/api';
 
 export default function ChatScreen() {
   const params = useLocalSearchParams<{ id: string; receiver_id?: string }>();
@@ -25,9 +25,36 @@ export default function ChatScreen() {
   const router = useRouter();
   const userId = useAuthStore((s) => s.user?.id);
   const { useMessages, useSendMessage } = useChat();
-  const { data: messages, isLoading } = useMessages(id || '');
+  const [resolvedConversationId, setResolvedConversationId] = useState<string | null>(id && id !== 'new' ? id : null);
+  const conversationId = resolvedConversationId || (id && id !== 'new' ? id : '');
+  const { data: messages, isLoading, refetch } = useMessages(conversationId);
   const sendMessage = useSendMessage();
   const [text, setText] = useState('');
+  const [resolveLoading, setResolveLoading] = useState(id === 'new' && !!receiverId);
+
+  useEffect(() => {
+    if (id === 'new' && receiverId && !resolvedConversationId) {
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await apiService.getOrCreateConversation(receiverId);
+          if (!cancelled && res.conversation_id) {
+            setResolvedConversationId(res.conversation_id);
+          }
+        } catch (err) {
+          console.error('getOrCreateConversation:', err);
+        } finally {
+          if (!cancelled) setResolveLoading(false);
+        }
+      })();
+      return () => { cancelled = true; };
+    } else if (id && id !== 'new') {
+      setResolvedConversationId(id);
+      setResolveLoading(false);
+    } else {
+      setResolveLoading(false);
+    }
+  }, [id, receiverId, resolvedConversationId]);
 
   const handleSend = useCallback(async () => {
     if (!text.trim() || !receiverId) return;
@@ -38,10 +65,11 @@ export default function ChatScreen() {
         receiver_id: receiverId,
         content,
       });
+      refetch();
     } catch (err) {
       console.error(err);
     }
-  }, [text, receiverId, sendMessage]);
+  }, [text, receiverId, sendMessage, refetch]);
 
   const renderItem = useCallback(({ item }: { item: Message }) => {
     const isMe = item.sender_id === userId;
@@ -70,7 +98,9 @@ export default function ChatScreen() {
           inverted
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>{isLoading ? 'Loading...' : 'No messages yet. Say hi!'}</Text>
+              <Text style={styles.emptyText}>
+                {resolveLoading || isLoading ? 'Loading...' : 'No messages yet. Say hi!'}
+              </Text>
             </View>
           }
         />

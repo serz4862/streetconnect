@@ -1,14 +1,11 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import FeedLog from '../models/FeedLog';
-import Dog from '../models/Dog';
-import User from '../models/User';
-import DogCaretaker from '../models/DogCaretaker';
-import Notification, { NotificationType } from '../models/Notification';
 import { AuthRequest } from '../middleware/auth';
 import { RedisCache } from '../config/redis';
 import { AppError } from '../middleware/errorHandler';
 import pusherService from '../services/pusher.service';
+import { NotificationType } from '../models/Notification';
+import { supabase } from '../services/supabase.service';
 
 const createFeedLogSchema = z.object({
   dog_id: z.string().uuid(),
@@ -23,36 +20,40 @@ export class FeedController {
     const userId = req.user!.id;
     const data = createFeedLogSchema.parse(req.body);
 
-    const dog = await Dog.findByPk(data.dog_id);
+    const { data: dog } = await supabase.from('dogs').select('id').eq('id', data.dog_id).single();
     if (!dog) {
       throw new AppError('Dog not found', 404);
     }
 
-    // Create feed log
-    const feedLog = await FeedLog.create({
-      dog_id: data.dog_id,
-      user_id: userId,
-      fed_at: new Date(),
-      notes: data.notes,
-      image_url: data.image_url,
-      latitude: data.latitude,
-      longitude: data.longitude,
-    });
+    const { data: feedLog, error } = await supabase
+      .from('feed_logs')
+      .insert({
+        dog_id: data.dog_id,
+        user_id: userId,
+        fed_at: new Date().toISOString(),
+        notes: data.notes,
+        image_url: data.image_url,
+        latitude: data.latitude,
+        longitude: data.longitude,
+      })
+      .select()
+      .single();
 
-    // Update dog's last_fed_at
-    dog.last_fed_at = new Date();
-    await dog.save();
+    if (error || !feedLog) {
+      throw new AppError(`Failed to log feed: ${error?.message}`, 500);
+    }
 
-    // Update cache
+    await supabase
+      .from('dogs')
+      .update({ last_fed_at: new Date().toISOString() })
+      .eq('id', data.dog_id);
+
     await RedisCache.del(`dog:${data.dog_id}`);
     await RedisCache.del(`feed:dog:${data.dog_id}`);
 
-    // Add to feed log list in Redis
-    await RedisCache.lpush(`feed:logs:${data.dog_id}`, feedLog.toJSON(), 86400);
-
     res.status(201).json({
       message: 'Feed logged successfully',
-      feed_log: feedLog.toJSON(),
+      feed_log: feedLog,
     });
   }
 
@@ -61,28 +62,27 @@ export class FeedController {
     const limit = parseInt(req.query.limit as string) || 20;
     const offset = parseInt(req.query.offset as string) || 0;
 
-    // Try cache first (only for first page)
-    if (offset === 0) {
-      const cached = await RedisCache.lrange<FeedLog>(`feed:logs:${dogId}`, 0, limit - 1);
-      if (cached.length > 0) {
-        res.json({ feed_logs: cached, total: cached.length });
-        return;
-      }
+    const { data: feedLogs, error } = await supabase
+      .from('feed_logs')
+      .select('*')
+      .eq('dog_id', dogId)
+      .order('fed_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    const { count } = await supabase.from('feed_logs').select('*', { count: 'exact', head: true }).eq('dog_id', dogId);
+
+    if (error) {
+      throw new AppError(`Failed to fetch feed logs: ${error.message}`, 500);
     }
 
-    const feedLogs = await FeedLog.findAll({
-      where: { dog_id: dogId },
-      include: [{ model: User, as: 'feeder', attributes: ['id', 'name', 'avatar_url'] }],
-      order: [['fed_at', 'DESC']],
-      limit,
-      offset,
-    });
-
-    const total = await FeedLog.count({ where: { dog_id: dogId } });
+    const logs = feedLogs || [];
+    const userIds = [...new Set(logs.map((f: any) => f.user_id))];
+    const { data: users } = await supabase.from('users').select('id, name, avatar_url').in('id', userIds);
+    const userMap = (users || []).reduce((acc: any, u) => { acc[u.id] = u; return acc; }, {});
 
     res.json({
-      feed_logs: feedLogs.map((f) => f.toJSON()),
-      total,
+      feed_logs: logs.map((f: any) => ({ ...f, feeder: userMap[f.user_id] })),
+      total: count ?? 0,
     });
   }
 
@@ -91,96 +91,97 @@ export class FeedController {
     const limit = parseInt(req.query.limit as string) || 20;
     const offset = parseInt(req.query.offset as string) || 0;
 
-    const feedLogs = await FeedLog.findAll({
-      where: { user_id: userId },
-      include: [
-        {
-          model: Dog,
-          as: 'dog',
-          attributes: ['id', 'name', 'color', 'gender', 'image_url'],
-        },
-      ],
-      order: [['fed_at', 'DESC']],
-      limit,
-      offset,
-    });
+    const { data: feedLogs, error } = await supabase
+      .from('feed_logs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('fed_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    const total = await FeedLog.count({ where: { user_id: userId } });
+    const { count } = await supabase.from('feed_logs').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+
+    if (error) {
+      throw new AppError(`Failed to fetch feed logs: ${error.message}`, 500);
+    }
+
+    const logs = feedLogs || [];
+    const dogIds = [...new Set(logs.map((f: any) => f.dog_id))];
+    const { data: dogs } = await supabase.from('dogs').select('id, name, color, gender, image_url').in('id', dogIds);
+    const dogMap = (dogs || []).reduce((acc: any, d) => { acc[d.id] = d; return acc; }, {});
 
     res.json({
-      feed_logs: feedLogs.map((f) => f.toJSON()),
-      total,
+      feed_logs: logs.map((f: any) => ({ ...f, dog: dogMap[f.dog_id] })),
+      total: count ?? 0,
     });
   }
 
   async checkUnfedDogs(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    // Get user's dogs
-    const caretakers = await DogCaretaker.findAll({
-      where: { user_id: userId },
-      include: [{ model: Dog, as: 'dog' }],
-    });
+    const { data: caretakers } = await supabase
+      .from('dog_caretakers')
+      .select('dog_id')
+      .eq('user_id', userId);
 
-    const unfedDogs = [];
-    const now = new Date();
-    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    for (const caretaker of caretakers as any[]) {
-      const dog = caretaker.dog;
-      if (!dog.last_fed_at || new Date(dog.last_fed_at) < twentyFourHoursAgo) {
-        unfedDogs.push({
-          id: dog.id,
-          name: dog.name,
-          color: dog.color,
-          last_fed_at: dog.last_fed_at,
-        });
-      }
+    if (!caretakers?.length) {
+      res.json({ unfed_dogs: [], total: 0 });
+      return;
     }
 
+    const dogIds = caretakers.map((c: any) => c.dog_id);
+    const { data: dogs } = await supabase
+      .from('dogs')
+      .select('id, name, color, last_fed_at')
+      .in('id', dogIds);
+
+    const unfedDogs = (dogs || []).filter((d: any) => !d.last_fed_at || d.last_fed_at < twentyFourHoursAgo);
+
     res.json({
-      unfed_dogs: unfedDogs,
+      unfed_dogs: unfedDogs.map((d: any) => ({ id: d.id, name: d.name, color: d.color, last_fed_at: d.last_fed_at })),
       total: unfedDogs.length,
     });
   }
 
   async sendFeedReminders(_req: AuthRequest, res: Response): Promise<void> {
-    // This should be called by a cron job, but can also be triggered manually
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    // Find all dogs not fed in 24 hours
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const { data: unfedDogs } = await supabase
+      .from('dogs')
+      .select('id, name')
+      .or(`last_fed_at.lt.${twentyFourHoursAgo},last_fed_at.is.null`);
 
-    const unfedDogs = await Dog.findAll({
-      where: {
-        last_fed_at: {
-          $lt: twentyFourHoursAgo,
-        },
-      },
-      include: [
-        {
-          model: User,
-          as: 'caretakers',
-          through: { attributes: ['caretaker_type'] },
-        },
-      ],
-    });
+    if (!unfedDogs?.length) {
+      res.json({ message: 'Feed reminders sent', count: 0 });
+      return;
+    }
 
-    for (const dog of unfedDogs as any[]) {
-      for (const caretaker of dog.caretakers) {
-        // Create notification
-        const notification = await Notification.create({
-          user_id: caretaker.id,
+    const dogIds = unfedDogs.map((d: any) => d.id);
+    const { data: caretakers } = await supabase
+      .from('dog_caretakers')
+      .select('user_id, dog_id')
+      .in('dog_id', dogIds);
+
+    const dogMap = unfedDogs.reduce((acc: any, d) => { acc[d.id] = d; return acc; }, {});
+
+    for (const ct of caretakers || []) {
+      const dog = dogMap[ct.dog_id];
+      const { data: notif } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: ct.user_id,
           type: NotificationType.DOG_NOT_FED,
           title: 'Feed Reminder',
-          message: `${dog.name || 'Dog'} hasn't been fed in 24 hours`,
-          data: {
-            dog_id: dog.id,
-            dog_name: dog.name,
-          },
-        });
+          message: `${dog?.name || 'Dog'} hasn't been fed in 24 hours`,
+          data: { dog_id: dog?.id, dog_name: dog?.name },
+        })
+        .select()
+        .single();
 
-        // Send via Pusher
-        await pusherService.sendNotification(caretaker.id, notification.toJSON());
+      if (notif) {
+        try {
+          await pusherService.sendNotification(ct.user_id, notif);
+        } catch (_) {}
       }
     }
 

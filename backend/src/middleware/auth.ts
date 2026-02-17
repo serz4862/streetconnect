@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-import { User } from '../models';
 import { RedisCache } from '../config/redis';
 import logger from '../utils/logger';
+import { supabase } from '../services/supabase.service';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -44,30 +44,46 @@ export const authenticate = async (
     let dbUser;
     if (decoded.phone) {
       // New tokens: resolve by phone (source of truth)
-      dbUser = await User.findOne({
-        where: { phone: decoded.phone },
-      });
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone', decoded.phone)
+        .single();
+      
+      if (error) {
+        logger.error('Error fetching user by phone:', error);
+      }
+      dbUser = data;
     } else {
       // Old tokens: resolve by userId (legacy)
-      dbUser = await User.findByPk(decoded.userId);
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', decoded.userId)
+        .single();
+      
+      if (error) {
+        logger.error('Error fetching user by id:', error);
+      }
+      dbUser = data;
     }
 
-    if (!dbUser || !dbUser.get('is_active')) {
+    if (!dbUser || !dbUser.is_active) {
       res.status(401).json({ error: 'User not found or inactive - please log in again' });
       return;
     }
 
-    const userId = dbUser.get('id') as string;
+    const userId = dbUser.id as string;
     let user: Record<string, unknown> | null = await RedisCache.get<Record<string, unknown>>(`user:${userId}`);
     if (!user) {
-      user = dbUser.toJSON() as unknown as Record<string, unknown>;
+      user = dbUser as unknown as Record<string, unknown>;
       await RedisCache.set(`user:${userId}`, user, 3600);
     }
 
     req.user = {
       id: userId,
-      phone: dbUser.get('phone') as string,
-      role: (dbUser.get('role') as string) ?? decoded.role,
+      phone: dbUser.phone as string,
+      role: (dbUser.role as string) ?? decoded.role,
     };
 
     next();

@@ -17,6 +17,12 @@ interface Config {
     url: string;
     ttl: number;
   };
+  supabase: {
+    url: string;
+    serviceRoleKey: string;
+    anonKey: string;
+    dbUrl: string;
+  };
   jwt: {
     secret: string;
     expiresIn: string;
@@ -70,6 +76,12 @@ export const config: Config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     ttl: parseInt(process.env.REDIS_TTL || '3600', 10),
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    anonKey: process.env.SUPABASE_ANON_KEY || '',
+    dbUrl: process.env.SUPABASE_DB_URL || '',
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'your-super-secret-jwt-key',

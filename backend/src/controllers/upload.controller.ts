@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
-import s3Service from '../services/s3.service';
+import { storageService } from '../services/storage.service';
 
 const getUploadUrlSchema = z.object({
   file_type: z.string(),
@@ -19,9 +19,9 @@ export class UploadController {
       throw new AppError('Invalid file type. Only images are allowed', 400);
     }
 
-    const { uploadUrl, fileUrl, key } = await s3Service.getSignedUploadUrl(
+    const { uploadUrl, fileUrl, key } = await storageService.getSignedUploadUrl(
       data.file_type,
-      data.folder
+      data.folder as any
     );
 
     res.json({

@@ -5,6 +5,7 @@ import 'express-async-errors';
 
 const router = Router();
 
+router.get('/', authenticate, (req, res) => userController.getAllUsers(req, res));
 router.get('/profile', authenticate, (req, res) => userController.getProfile(req, res));
 router.put('/profile', authenticate, (req, res) => userController.updateProfile(req, res));
 router.put('/role', authenticate, (req, res) => userController.updateRole(req, res));

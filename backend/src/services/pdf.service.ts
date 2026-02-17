@@ -1,48 +1,42 @@
 import PDFDocument from 'pdfkit';
-import { Dog, User, FeedLog, Report } from '../models';
 import logger from '../utils/logger';
-import s3Service from './s3.service';
+import { storageService } from './storage.service';
+import { supabase } from './supabase.service';
 
 class PDFService {
   async generateDogReport(dogId: string): Promise<string> {
     try {
-      // Fetch dog data with relations
-      const dog = await Dog.findByPk(dogId, {
-        include: [
-          { model: User, as: 'creator' },
-          {
-            model: FeedLog,
-            as: 'feed_logs',
-            limit: 10,
-            order: [['fed_at', 'DESC']],
-          },
-          {
-            model: Report,
-            as: 'reports',
-            limit: 10,
-            order: [['created_at', 'DESC']],
-          },
-        ],
-      });
+      const { data: dog, error: dogError } = await supabase.from('dogs').select('*').eq('id', dogId).single();
 
-      if (!dog) {
+      if (dogError || !dog) {
         throw new Error('Dog not found');
       }
 
-      // Create PDF
+      const { data: feedLogs } = await supabase
+        .from('feed_logs')
+        .select('*')
+        .eq('dog_id', dogId)
+        .order('fed_at', { ascending: false })
+        .limit(10);
+
+      const { data: reports } = await supabase
+        .from('reports')
+        .select('*')
+        .eq('dog_id', dogId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
       const doc = new PDFDocument({ size: 'A4', margin: 50 });
       const chunks: Buffer[] = [];
 
       doc.on('data', (chunk) => chunks.push(chunk));
 
-      // Header
       doc
         .fontSize(24)
         .font('Helvetica-Bold')
         .text('StreetConnect - Dog Report', { align: 'center' })
         .moveDown();
 
-      // Dog Info
       doc
         .fontSize(18)
         .font('Helvetica-Bold')
@@ -50,7 +44,7 @@ class PDFService {
         .moveDown(0.5);
 
       doc.fontSize(12).font('Helvetica');
-      
+
       if (dog.name) {
         doc.text(`Name: ${dog.name}`);
       }
@@ -60,33 +54,32 @@ class PDFService {
       doc.text(`Approx. Age: ${dog.age_approx || 'Unknown'} years`);
       doc.text(`Sterilized: ${dog.is_sterilized ? 'Yes' : 'No'}`);
       doc.text(`Health Status: ${dog.health_status}`);
-      
+
       if (dog.health_notes) {
         doc.text(`Health Notes: ${dog.health_notes}`);
       }
-      
+
       doc.moveDown();
       doc.text(`Location: ${dog.location_name || `${dog.latitude}, ${dog.longitude}`}`);
       doc.text(`Latitude: ${dog.latitude}`);
       doc.text(`Longitude: ${dog.longitude}`);
-      
+
       if (dog.last_seen_at) {
         doc.text(`Last Seen: ${new Date(dog.last_seen_at).toLocaleString()}`);
       }
-      
+
       if (dog.last_fed_at) {
         doc.text(`Last Fed: ${new Date(dog.last_fed_at).toLocaleString()}`);
       }
-      
+
       doc.moveDown();
       doc.text(`QR Code ID: ${dog.qr_code_id || 'Not generated'}`);
       doc.text(`Created: ${new Date(dog.created_at).toLocaleDateString()}`);
-      
+
       doc.moveDown(2);
 
-      // Feed History
-      const feedLogs = (dog as any).feed_logs;
-      if (feedLogs && feedLogs.length > 0) {
+      const feedList = feedLogs || [];
+      if (feedList.length > 0) {
         doc
           .fontSize(18)
           .font('Helvetica-Bold')
@@ -94,21 +87,18 @@ class PDFService {
           .moveDown(0.5);
 
         doc.fontSize(12).font('Helvetica');
-        
-        feedLogs.forEach((feed: any, index: number) => {
+
+        feedList.forEach((feed: any, index: number) => {
           doc.text(
-            `${index + 1}. ${new Date(feed.fed_at).toLocaleString()}${
-              feed.notes ? ` - ${feed.notes}` : ''
-            }`
+            `${index + 1}. ${new Date(feed.fed_at).toLocaleString()}${feed.notes ? ` - ${feed.notes}` : ''}`
           );
         });
-        
+
         doc.moveDown(2);
       }
 
-      // Reports
-      const reports = (dog as any).reports;
-      if (reports && reports.length > 0) {
+      const reportList = reports || [];
+      if (reportList.length > 0) {
         doc
           .fontSize(18)
           .font('Helvetica-Bold')
@@ -116,8 +106,8 @@ class PDFService {
           .moveDown(0.5);
 
         doc.fontSize(12).font('Helvetica');
-        
-        reports.forEach((report: any, index: number) => {
+
+        reportList.forEach((report: any, index: number) => {
           doc.text(`${index + 1}. ${report.title} (${report.type})`);
           doc.text(`   Status: ${report.status}`);
           doc.text(`   Location: ${report.location_name || `${report.latitude}, ${report.longitude}`}`);
@@ -129,7 +119,6 @@ class PDFService {
         });
       }
 
-      // Footer
       doc
         .moveDown(2)
         .fontSize(10)
@@ -139,15 +128,13 @@ class PDFService {
 
       doc.end();
 
-      // Wait for PDF to be generated
       const pdfBuffer = await new Promise<Buffer>((resolve) => {
         doc.on('end', () => {
           resolve(Buffer.concat(chunks));
         });
       });
 
-      // Upload to S3
-      const pdfUrl = await s3Service.uploadBuffer(pdfBuffer, 'reports', 'application/pdf');
+      const pdfUrl = await storageService.uploadBuffer(pdfBuffer, 'reports', 'application/pdf');
 
       return pdfUrl;
     } catch (error) {

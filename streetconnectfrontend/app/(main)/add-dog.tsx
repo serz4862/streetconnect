@@ -31,7 +31,7 @@ export default function AddDogScreen() {
   const createDog = useCreateDog();
   const updateDog = useUpdateDog();
   const { currentLocation } = useLocationStore();
-  const { pickImage, uploadImage, isUploading } = useImageUpload();
+  const { pickImage, takePhoto, uploadImage, isUploading } = useImageUpload();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
   const {
@@ -49,6 +49,18 @@ export default function AddDogScreen() {
 
   const handlePickImage = async () => {
     const asset = await pickImage();
+    if (asset?.uri) {
+      try {
+        const url = await uploadImage(asset.uri, 'dogs');
+        setImageUrl(url);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    const asset = await takePhoto();
     if (asset?.uri) {
       try {
         const url = await uploadImage(asset.uri, 'dogs');
@@ -89,9 +101,14 @@ export default function AddDogScreen() {
         <Text style={styles.headerTitle}>Add Dog</Text>
       </View>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        <TouchableOpacity style={styles.photoBox} onPress={handlePickImage}>
-          <Text style={styles.photoText}>{imageUrl ? 'Photo added' : 'Tap to add photo'}</Text>
-        </TouchableOpacity>
+        <View style={styles.photoRow}>
+          <TouchableOpacity style={styles.photoBox} onPress={handleTakePhoto}>
+            <Text style={styles.photoText}>{imageUrl ? 'Retake photo' : 'Take photo'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.photoBox} onPress={handlePickImage}>
+            <Text style={styles.photoText}>{imageUrl ? 'Change from gallery' : 'Choose from gallery'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <Controller control={control} name="name" render={({ field }) => <Input label="Name" placeholder="Dog name" value={field.value} onChangeText={field.onChange} error={errors.name?.message} />} />
         <Controller control={control} name="color" render={({ field }) => <Input label="Color" placeholder="e.g. Golden" value={field.value} onChangeText={field.onChange} />} />
@@ -160,7 +177,8 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
   scroll: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
-  photoBox: { height: 120, backgroundColor: colors.surface, borderRadius: 12, marginBottom: 16, justifyContent: 'center', alignItems: 'center' },
+  photoRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  photoBox: { flex: 1, height: 120, backgroundColor: colors.surface, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   photoText: { fontSize: 14, color: colors.textSecondary },
   row: { marginBottom: 16 },
   label: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8 },
