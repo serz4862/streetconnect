@@ -136,7 +136,8 @@ export default function ReportIssueScreen() {
         latitude: lat,
         longitude: lng,
         dog_id: params.dog_id || undefined,
-        // Pass extra metadata as description
+        severity: data.severity,
+        issue_type: data.issue_type,
       });
       setSubmitted(true);
       setTimeout(() => router.back(), 1500);

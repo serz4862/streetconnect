@@ -15,5 +15,6 @@ router.delete('/:id', authenticate, (req, res) => dogController.deleteDog(req, r
 router.post('/scan-qr', authenticate, (req, res) => dogController.scanQRCode(req, res));
 router.post('/:id/caretaker', authenticate, (req, res) => dogController.addCaretaker(req, res));
 router.get('/:id/report', authenticate, (req, res) => dogController.generateReport(req, res));
+router.get('/:id/activity', authenticate, (req, res) => dogController.getDogActivity(req, res));
 
 export default router;

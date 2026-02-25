@@ -9,6 +9,7 @@ import qrcodeService from '../services/qrcode.service';
 import pdfService from '../services/pdf.service';
 import { supabase } from '../services/supabase.service';
 import { isDogImage } from '../services/vision.service';
+import { logDogActivity, describeChanges } from '../services/activity.service';
 
 const createDogSchema = z.object({
   name: z.string().optional(),
@@ -27,7 +28,11 @@ const createDogSchema = z.object({
   caretaker_type: z.nativeEnum(CaretakerType).optional(),
 });
 
-const updateDogSchema = createDogSchema.partial();
+const updateDogSchema = createDogSchema.partial().extend({
+  is_lost: z.boolean().optional(),
+  is_found: z.boolean().optional(),
+  last_seen_at: z.string().optional(),
+});
 
 // Approximate degrees for radius (1 deg lat ≈ 111km, 5km ≈ 0.045)
 function getBoundingBox(lat: number, lng: number, radiusKm: number) {
@@ -105,6 +110,15 @@ export class DogController {
     await RedisCache.set(`dog:${dog.id}`, { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId }, 3600);
     await RedisCache.delPattern('dogs:nearby:*');
 
+    await logDogActivity(
+      dog.id,
+      userId,
+      'created',
+      `${data.name || 'Dog'} added to StreetConnect`,
+      data.description,
+      { health_status: data.health_status ?? 'unknown', location: data.location_name },
+    );
+
     const finalDog = { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId };
     res.status(201).json({
       message: 'Dog created successfully',
@@ -154,15 +168,20 @@ export class DogController {
   }
 
   async updateDog(req: AuthRequest, res: Response): Promise<void> {
+    const userId = req.user!.id;
     const { id } = req.params;
     const data = updateDogSchema.parse(req.body);
 
+    // Skip dog-image validation for is_lost / is_found toggles
     if (data.image_url) {
       const ok = await isDogImage(data.image_url);
       if (!ok) {
         throw new AppError('This is not a dog. Please upload a photo of a dog.', 400);
       }
     }
+
+    // Fetch current values to detect changes for activity log
+    const { data: before } = await supabase.from('dogs').select('*').eq('id', id).single();
 
     const { data: dog, error } = await supabase
       .from('dogs')
@@ -175,7 +194,31 @@ export class DogController {
       throw new AppError('Dog not found', 404);
     }
 
-    await RedisCache.set(`dog:${id}`, dog, 3600);
+    // Log appropriate activity based on what changed
+    if (before) {
+      if ('is_lost' in data) {
+        if (data.is_lost && !before.is_lost) {
+          await logDogActivity(id, userId, 'lost', `${before.name || 'Dog'} reported lost`, undefined, { previous_status: before.health_status });
+        } else if (!data.is_lost && before.is_lost) {
+          await logDogActivity(id, userId, 'found', `${before.name || 'Dog'} marked as found safe`);
+        }
+      } else if (data.health_status && data.health_status !== before.health_status) {
+        await logDogActivity(id, userId, 'status_changed',
+          `Health status changed: ${before.health_status} → ${data.health_status}`,
+          undefined,
+          { old_status: before.health_status, new_status: data.health_status },
+        );
+      } else if (data.image_url && data.image_url !== before.image_url) {
+        await logDogActivity(id, userId, 'image_updated', `${before.name || 'Dog'} photo updated`);
+      } else {
+        const desc = describeChanges(before as any, data as any);
+        if (desc !== 'Info updated' || Object.keys(data).length > 0) {
+          await logDogActivity(id, userId, 'info_updated', `Info updated`, desc !== 'Info updated' ? desc : undefined);
+        }
+      }
+    }
+
+    await RedisCache.del(`dog:${id}`);
     if (data.latitude && data.longitude) {
       await RedisCache.geoadd('dogs:locations', data.longitude, data.latitude, id);
     }
@@ -407,6 +450,37 @@ export class DogController {
     await RedisCache.delPattern('dogs:nearby:*');
 
     res.json({ message: 'Dog deleted successfully' });
+  }
+
+  /** Return all activity log entries for a dog, most recent first */
+  async getDogActivity(req: AuthRequest, res: Response): Promise<void> {
+    const { id } = req.params;
+    const limit = parseInt(req.query.limit as string) || 100;
+
+    const { data, error } = await supabase
+      .from('dog_activity_log')
+      .select('*')
+      .eq('dog_id', id)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      throw new AppError(`Failed to fetch activity: ${error.message}`, 500);
+    }
+
+    const entries = data || [];
+    const userIds = [...new Set(entries.map((e: any) => e.user_id).filter(Boolean))];
+    const { data: users } = userIds.length
+      ? await supabase.from('users').select('id, name, avatar_url').in('id', userIds)
+      : { data: [] };
+    const userMap = (users || []).reduce((acc: any, u: any) => { acc[u.id] = u; return acc; }, {});
+
+    res.json({
+      activity: entries.map((e: any) => ({
+        ...e,
+        actor: e.user_id ? userMap[e.user_id] : null,
+      })),
+    });
   }
 }
 

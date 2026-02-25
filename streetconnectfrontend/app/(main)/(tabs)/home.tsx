@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import SwipeableDogCard from '../../../components/dog/SwipeableDogCard';
 import { useAuthStore } from '../../../store/auth.store';
@@ -183,6 +184,7 @@ function LocationPicker({
 // ─── Main HomeScreen ──────────────────────────────────────────────
 export default function HomeScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { user } = useAuthStore();
   const {
     currentLocation,
@@ -225,12 +227,12 @@ export default function HomeScreen() {
   const handleReportLost = useCallback(async (dog: Dog) => {
     try {
       await apiService.updateDog(dog.id, { is_lost: !dog.is_lost });
-      refetch();
+      queryClient.invalidateQueries({ queryKey: ['dogs'] });
     } catch {
       // fallback: navigate to report screen
       router.push({ pathname: '/(main)/report/lost', params: { dog_id: dog.id } });
     }
-  }, [router, refetch]);
+  }, [router, queryClient]);
 
   const handleReportIssue = useCallback((dog: Dog) => {
     router.push({ pathname: '/(main)/report/issue', params: { dog_id: dog.id } });
@@ -554,7 +556,6 @@ export default function HomeScreen() {
         ListEmptyComponent={ListEmpty}
         contentContainerStyle={sortedDogs.length === 0 ? styles.listEmpty : styles.list}
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews
         windowSize={10}
         maxToRenderPerBatch={6}
         initialNumToRender={8}

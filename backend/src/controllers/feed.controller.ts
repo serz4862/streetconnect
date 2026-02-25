@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errorHandler';
 import pusherService from '../services/pusher.service';
 import { NotificationType } from '../models/Notification';
 import { supabase } from '../services/supabase.service';
+import { logDogActivity } from '../services/activity.service';
 
 const createFeedLogSchema = z.object({
   dog_id: z.string().uuid(),
@@ -45,11 +46,21 @@ export class FeedController {
 
     await supabase
       .from('dogs')
-      .update({ last_fed_at: new Date().toISOString() })
+      .update({ last_fed_at: new Date().toISOString(), last_seen_at: new Date().toISOString() })
       .eq('id', data.dog_id);
+
+    await logDogActivity(
+      data.dog_id,
+      userId,
+      'fed',
+      'Fed',
+      data.notes,
+      { feed_log_id: feedLog.id },
+    );
 
     await RedisCache.del(`dog:${data.dog_id}`);
     await RedisCache.del(`feed:dog:${data.dog_id}`);
+    await RedisCache.delPattern('dogs:nearby:*');
 
     res.status(201).json({
       message: 'Feed logged successfully',

@@ -5,6 +5,7 @@ import { AuthRequest } from '../middleware/auth';
 import { RedisCache } from '../config/redis';
 import { AppError } from '../middleware/errorHandler';
 import { supabase } from '../services/supabase.service';
+import { logDogActivity, issueToHealthStatus } from '../services/activity.service';
 
 const createReportSchema = z.object({
   dog_id: z.string().uuid().optional(),
@@ -15,6 +16,9 @@ const createReportSchema = z.object({
   latitude: z.number(),
   longitude: z.number(),
   location_name: z.string().optional(),
+  severity: z.string().optional(),
+  issue_type: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 const updateReportSchema = z.object({
@@ -48,10 +52,39 @@ export class ReportController {
     if (data.dog_id) {
       if (data.type === ReportType.LOST) {
         await supabase.from('dogs').update({ is_lost: true }).eq('id', data.dog_id);
+        await logDogActivity(data.dog_id, userId, 'lost', `Reported as lost`, data.description, { report_id: report.id });
       } else if (data.type === ReportType.FOUND) {
         await supabase.from('dogs').update({ is_found: true, is_lost: false }).eq('id', data.dog_id);
+        await logDogActivity(data.dog_id, userId, 'found', `Marked as found`, data.description, { report_id: report.id });
+      } else if ([ReportType.ISSUE, ReportType.HEALTH, ReportType.ABUSE].includes(data.type as ReportType)) {
+        // Update dog health status based on severity / issue type
+        const newStatus = issueToHealthStatus(data.severity, data.issue_type);
+        if (newStatus) {
+          await supabase.from('dogs').update({ health_status: newStatus }).eq('id', data.dog_id);
+        }
+        const issueLabel = data.issue_type || data.type;
+        const severityLabel = data.severity ? ` (${data.severity} severity)` : '';
+        await logDogActivity(
+          data.dog_id,
+          userId,
+          'report_filed',
+          `Issue reported: ${issueLabel}${severityLabel}`,
+          data.description,
+          { report_id: report.id, severity: data.severity, issue_type: data.issue_type, image_url: data.image_url },
+        );
+        if (newStatus) {
+          await logDogActivity(
+            data.dog_id,
+            userId,
+            'status_changed',
+            `Health status updated to ${newStatus}`,
+            undefined,
+            { new_status: newStatus, report_id: report.id },
+          );
+        }
       }
       await RedisCache.del(`dog:${data.dog_id}`);
+      await RedisCache.delPattern('dogs:nearby:*');
     }
 
     await RedisCache.geoadd('reports:locations', data.longitude, data.latitude, report.id);

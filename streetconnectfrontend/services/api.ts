@@ -94,6 +94,8 @@ export const apiService = {
     request<{ reports: any[] }>('GET', `/reports/my-reports?${params ? new URLSearchParams(params) : ''}`),
   getDogReports: (dogId: string) =>
     request<{ reports: any[] }>('GET', `/reports/dog/${dogId}`),
+  getDogActivity: (dogId: string) =>
+    request<{ activity: any[] }>('GET', `/dogs/${dogId}/activity`),
   updateReport: (id: string, data: any) => request<any>('PUT', `/reports/${id}`, data),
   deleteReport: (id: string) => request<void>('DELETE', `/reports/${id}`),
 

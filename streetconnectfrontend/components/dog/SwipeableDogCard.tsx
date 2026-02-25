@@ -33,26 +33,49 @@ function formatLastSeen(dog: Dog): string {
   return `${Math.floor(diff / 7)}w ago`;
 }
 
-/** True if the dog has an active health issue */
 function hasIssue(dog: Dog): boolean {
   return ['sick', 'injured', 'critical'].includes(dog.health_status);
 }
 
 const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssue }) => {
   const swipeRef = useRef<Swipeable>(null);
-  const close = () => swipeRef.current?.close();
 
-  const handlePress = useCallback(() => onPress(dog), [dog, onPress]);
+  /**
+   * All mutable values are stored in refs so that:
+   * 1. Action button callbacks have zero deps (stable functions, no re-registration)
+   * 2. They always read the LATEST dog/callback values when a gesture fires
+   */
+  const dogRef = useRef(dog);
+  const onPressRef = useRef(onPress);
+  const onReportLostRef = useRef(onReportLost);
+  const onReportIssueRef = useRef(onReportIssue);
 
-  // ── Right actions: Report Issue (orange) ──────────────────────
+  // Update refs synchronously on every render so they're always current
+  dogRef.current = dog;
+  onPressRef.current = onPress;
+  onReportLostRef.current = onReportLost;
+  onReportIssueRef.current = onReportIssue;
+
+  // Stable close helper
+  const close = useCallback(() => swipeRef.current?.close(), []);
+
+  // Stable press handler
+  const handlePress = useCallback(() => {
+    onPressRef.current(dogRef.current);
+  }, []);
+
+  // ── Right: Report Issue (swipe LEFT to reveal) ────────────────
   const renderRightActions = useCallback(
     (_prog: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>) => {
-      const scale = dragX.interpolate({ inputRange: [-100, 0], outputRange: [1, 0.7], extrapolate: 'clamp' });
+      const scale = dragX.interpolate({ inputRange: [-120, 0], outputRange: [1, 0.75], extrapolate: 'clamp' });
       return (
         <Animated.View style={[styles.sideAction, { transform: [{ scale }] }]}>
           <TouchableOpacity
             style={[styles.actionBtn, styles.issueBtn]}
-            onPress={() => { close(); onReportIssue?.(dog); }}
+            onPress={() => {
+              swipeRef.current?.close();
+              onReportIssueRef.current?.(dogRef.current);
+            }}
             activeOpacity={0.8}
           >
             <Ionicons name="warning" size={22} color="#fff" />
@@ -61,19 +84,22 @@ const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssu
         </Animated.View>
       );
     },
-    [dog, onReportIssue],
+    [], // Stable — reads latest values via refs at gesture time
   );
 
-  // ── Left actions: Report Lost / Found Safe (red / green) ──────
+  // ── Left: Report Lost / Found Safe (swipe RIGHT to reveal) ───
   const renderLeftActions = useCallback(
     (_prog: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>) => {
-      const scale = dragX.interpolate({ inputRange: [0, 100], outputRange: [0.7, 1], extrapolate: 'clamp' });
-      const isLost = dog.is_lost;
+      const scale = dragX.interpolate({ inputRange: [0, 120], outputRange: [0.75, 1], extrapolate: 'clamp' });
+      const isLost = dogRef.current.is_lost;
       return (
         <Animated.View style={[styles.sideAction, { transform: [{ scale }] }]}>
           <TouchableOpacity
             style={[styles.actionBtn, isLost ? styles.foundBtn : styles.lostBtn]}
-            onPress={() => { close(); onReportLost?.(dog); }}
+            onPress={() => {
+              swipeRef.current?.close();
+              onReportLostRef.current?.(dogRef.current);
+            }}
             activeOpacity={0.8}
           >
             <Ionicons name={isLost ? 'checkmark-circle' : 'alert-circle'} size={22} color="#fff" />
@@ -84,7 +110,7 @@ const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssu
         </Animated.View>
       );
     },
-    [dog, onReportLost],
+    [], // Stable — reads latest values via refs at gesture time
   );
 
   const issue = hasIssue(dog);
@@ -99,17 +125,22 @@ const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssu
       ref={swipeRef}
       renderRightActions={renderRightActions}
       renderLeftActions={renderLeftActions}
-      rightThreshold={50}
-      leftThreshold={50}
+      rightThreshold={40}
+      leftThreshold={40}
       overshootRight={false}
       overshootLeft={false}
       friction={2}
+      containerStyle={styles.swipeContainer}
     >
       <TouchableOpacity style={containerStyle} onPress={handlePress} activeOpacity={0.75}>
         {/* Image */}
         <View style={styles.imgWrap}>
           {dog.image_url ? (
-            <Image source={{ uri: proxyImageUrl(dog.image_url) }} style={styles.img} resizeMode="cover" />
+            <Image
+              source={{ uri: proxyImageUrl(dog.image_url) }}
+              style={styles.img}
+              resizeMode="cover"
+            />
           ) : (
             <View style={[styles.img, styles.imgPlaceholder]}>
               <Text style={{ fontSize: 32 }}>🐕</Text>
@@ -154,9 +185,9 @@ const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssu
 
           {/* Swipe hint */}
           <View style={styles.hintRow}>
-            <Ionicons name="arrow-back" size={10} color={colors.textLight} />
+            <Ionicons name="chevron-back" size={11} color={colors.textLight} />
             <Text style={styles.hint}> Lost  ·  Issue </Text>
-            <Ionicons name="arrow-forward" size={10} color={colors.textLight} />
+            <Ionicons name="chevron-forward" size={11} color={colors.textLight} />
           </View>
         </View>
       </TouchableOpacity>
@@ -167,12 +198,14 @@ const SwipeableDogCard = memo<Props>(({ dog, onPress, onReportLost, onReportIssu
 SwipeableDogCard.displayName = 'SwipeableDogCard';
 
 const styles = StyleSheet.create({
+  swipeContainer: {
+    marginHorizontal: 16,
+    marginVertical: 5,
+  },
   container: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.card,
-    marginHorizontal: 16,
-    marginVertical: 5,
     padding: 12,
     borderRadius: 16,
     borderWidth: 1.5,
@@ -183,7 +216,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 3,
   },
-  // Status borders
   borderLost: {
     borderColor: '#FF3B30',
     backgroundColor: '#FFF5F5',
@@ -222,13 +254,11 @@ const styles = StyleSheet.create({
   hintRow: { flexDirection: 'row', alignItems: 'center' },
   hint: { fontSize: 10, color: colors.textLight },
 
-  // Action buttons
   sideAction: {
     justifyContent: 'center',
-    marginVertical: 5,
   },
   actionBtn: {
-    width: 76,
+    width: 80,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 16,

@@ -15,7 +15,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../../constants';
 import { useDogs } from '../../../hooks/useDogs';
-import { useFeed } from '../../../hooks/useFeed';
 import { apiService } from '../../../services/api';
 import { proxyImageUrl } from '../../../services/imageProxy';
 import { useQueryClient } from '@tanstack/react-query';
@@ -27,7 +26,7 @@ type Tab = 'details' | 'timeline' | 'photos' | 'caretakers';
 
 interface TimelineEntry {
   id: string;
-  type: 'feed' | 'report' | 'update';
+  type: 'created' | 'info_updated' | 'status_changed' | 'lost' | 'found' | 'fed' | 'report_filed' | 'image_updated' | string;
   date: string;
   title: string;
   description?: string;
@@ -41,29 +40,40 @@ export default function DogDetailScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { useDog, useUpdateDog } = useDogs();
-  const { useDogFeedHistory } = useFeed();
   const { data: dog, isLoading, refetch } = useDog(id || '');
-  const { data: feedLogs = [] } = useDogFeedHistory(id || '', { limit: 50 });
   const updateDog = useUpdateDog();
 
   const [tab, setTab] = useState<Tab>('details');
+  const [activity, setActivity] = useState<any[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [reports, setReports] = useState<any[]>([]);
-  const [reportsLoading, setReportsLoading] = useState(false);
   const [lostToggling, setLostToggling] = useState(false);
 
   useEffect(() => {
-    if (id) loadReports();
+    if (id) {
+      loadActivity();
+      loadReports();
+    }
   }, [id]);
+
+  const loadActivity = async () => {
+    try {
+      setActivityLoading(true);
+      const data: any = await apiService.getDogActivity(id!);
+      setActivity(data.activity || []);
+    } catch {
+      // silent — if table doesn't exist yet, timeline just shows empty
+    } finally {
+      setActivityLoading(false);
+    }
+  };
 
   const loadReports = async () => {
     try {
-      setReportsLoading(true);
       const data: any = await apiService.getDogReports(id!);
       setReports(data.reports || []);
     } catch {
       // silent
-    } finally {
-      setReportsLoading(false);
     }
   };
 
@@ -91,10 +101,11 @@ export default function DogDetailScreen() {
           text: isNowLost ? 'Mark Lost' : 'Mark Found',
           style: isNowLost ? 'destructive' : 'default',
           onPress: async () => {
-            setLostToggling(true);
+              setLostToggling(true);
             try {
               await updateDog.mutateAsync({ id: id!, data: { is_lost: isNowLost } });
               await refetch();
+              await loadActivity();
               queryClient.invalidateQueries({ queryKey: ['dogs'] });
             } catch (e: any) {
               Alert.alert('Error', e?.message || 'Failed to update');
@@ -107,37 +118,17 @@ export default function DogDetailScreen() {
     );
   }, [dog, id, lostToggling, updateDog, refetch, queryClient]);
 
-  // Build timeline from feed logs + reports
-  const timeline: TimelineEntry[] = [
-    ...feedLogs.map((log: any) => ({
-      id: `feed-${log.id}`,
-      type: 'feed' as const,
-      date: log.fed_at,
-      title: 'Fed',
-      description: log.notes || undefined,
-      actor: log.feeder?.name,
-    })),
-    ...reports.map((r: any) => ({
-      id: `report-${r.id}`,
-      type: 'report' as const,
-      date: r.created_at,
-      title: r.title || r.type,
-      description: r.description,
-      image_url: r.image_url,
-      severity: r.severity,
-      actor: r.reporter?.name,
-    })),
-    ...(dog?.created_at
-      ? [{
-          id: 'created',
-          type: 'update' as const,
-          date: dog.created_at,
-          title: 'Added to StreetConnect',
-          description: dog.description,
-          actor: dog.creator?.name,
-        }]
-      : []),
-  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // Build timeline from activity log
+  const timeline: TimelineEntry[] = activity.map((entry: any) => ({
+    id: entry.id,
+    type: entry.type as TimelineEntry['type'],
+    date: entry.created_at,
+    title: entry.title,
+    description: entry.description,
+    image_url: entry.metadata?.image_url as string | undefined,
+    severity: entry.metadata?.severity as string | undefined,
+    actor: entry.actor?.name,
+  }));
 
   // Collect all photos
   type PhotoItem = { id: string; url: string; label: string; date?: string };
@@ -301,7 +292,7 @@ export default function DogDetailScreen() {
 
           <TouchableOpacity
             style={styles.quickAction}
-            onPress={() => router.push({ pathname: '/(main)/feed', params: { dog_id: id } } as any)}
+            onPress={() => router.push({ pathname: '/(main)/log-feed', params: { dog_id: id } } as any)}
           >
             <View style={[styles.quickActionIcon, { backgroundColor: colors.primaryLight }]}>
               <Ionicons name="restaurant" size={20} color={colors.primary} />
@@ -372,7 +363,7 @@ export default function DogDetailScreen() {
         {/* ── Timeline Tab ── */}
         {tab === 'timeline' && (
           <View style={styles.section}>
-            {reportsLoading ? (
+            {activityLoading ? (
               <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 20 }} />
             ) : timeline.length === 0 ? (
               <Text style={styles.placeholder}>No activity yet.</Text>
@@ -521,11 +512,16 @@ function healthColor(status: string): string {
   }
 }
 
-function timelineDotStyle(type: TimelineEntry['type']): object {
+function timelineDotStyle(type: string): object {
   switch (type) {
-    case 'feed': return { backgroundColor: colors.success };
-    case 'report': return { backgroundColor: '#EF4444' };
-    case 'update': return { backgroundColor: colors.primary };
+    case 'fed': return { backgroundColor: '#10B981' };
+    case 'report_filed': return { backgroundColor: '#EF4444' };
+    case 'status_changed': return { backgroundColor: '#F59E0B' };
+    case 'lost': return { backgroundColor: '#EF4444' };
+    case 'found': return { backgroundColor: '#10B981' };
+    case 'created': return { backgroundColor: colors.primary };
+    case 'image_updated': return { backgroundColor: '#8B5CF6' };
+    case 'info_updated': return { backgroundColor: colors.primary };
     default: return { backgroundColor: colors.border };
   }
 }
