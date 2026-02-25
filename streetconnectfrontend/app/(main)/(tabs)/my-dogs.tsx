@@ -3,60 +3,92 @@ import {
   View,
   Text,
   StyleSheet,
-  
   FlatList,
   TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import { useDogs } from '../../../hooks/useDogs';
-import DogCard from '../../../components/dog/DogCard';
+import SwipeableDogCard from '../../../components/dog/SwipeableDogCard';
 import { colors } from '../../../constants';
 import { Dog } from '../../../types';
+import { apiService } from '../../../services/api';
 
 export default function MyDogsScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { useMyDogs } = useDogs();
-  const { data: dogs, isLoading } = useMyDogs();
+  const { data: dogs, isLoading, refetch } = useMyDogs();
 
   const handleDogPress = useCallback((dog: Dog) => {
     router.push(`/(main)/dog/${dog.id}`);
   }, [router]);
 
-  const renderItem = useCallback(({ item }: { item: Dog }) => (
-    <DogCard dog={item} onPress={handleDogPress} />
-  ), [handleDogPress]);
+  const handleReportLost = useCallback(async (dog: Dog) => {
+    try {
+      await apiService.updateDog(dog.id, { is_lost: !dog.is_lost });
+      queryClient.invalidateQueries({ queryKey: ['dogs'] });
+    } catch {
+      // silent
+    }
+  }, [queryClient]);
 
-  const ListHeader = (
-    <TouchableOpacity
-      style={styles.addCard}
-      onPress={() => router.push('/(main)/add-dog')}
-    >
-      <View style={styles.addIcon}>
-        <Text style={styles.addIconText}>+</Text>
-      </View>
-      <Text style={styles.addTitle}>Add Dog</Text>
-      <Text style={styles.addSubtitle}>Register your dog</Text>
-    </TouchableOpacity>
-  );
+  const handleReportIssue = useCallback((dog: Dog) => {
+    router.push({ pathname: '/(main)/report/issue', params: { dog_id: dog.id } });
+  }, [router]);
+
+  const renderItem = useCallback(({ item }: { item: Dog }) => (
+    <SwipeableDogCard
+      dog={item}
+      onPress={handleDogPress}
+      onReportLost={handleReportLost}
+      onReportIssue={handleReportIssue}
+    />
+  ), [handleDogPress, handleReportLost, handleReportIssue]);
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>My Dogs</Text>
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() => router.push('/(main)/add-dog')}
+        >
+          <Ionicons name="add" size={22} color={colors.primary} />
+        </TouchableOpacity>
       </View>
+
       <FlatList
         data={dogs || []}
         renderItem={renderItem}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={ListHeader}
         contentContainerStyle={styles.list}
+        onRefresh={refetch}
+        refreshing={isLoading}
+        ListHeaderComponent={
+          <TouchableOpacity
+            style={styles.addCard}
+            onPress={() => router.push('/(main)/add-dog')}
+          >
+            <View style={styles.addIcon}>
+              <Ionicons name="add" size={28} color={colors.primary} />
+            </View>
+            <View>
+              <Text style={styles.addTitle}>Register a Dog</Text>
+              <Text style={styles.addSubtitle}>Add a new street dog to the community</Text>
+            </View>
+          </TouchableOpacity>
+        }
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>
-              {isLoading ? 'Loading...' : 'No dogs yet. Tap Add Dog to register.'}
-            </Text>
-          </View>
+          !isLoading ? (
+            <View style={styles.empty}>
+              <Ionicons name="paw-outline" size={48} color={colors.border} />
+              <Text style={styles.emptyTitle}>No dogs registered yet</Text>
+              <Text style={styles.emptySubtitle}>Start by adding a dog you care for</Text>
+            </View>
+          ) : null
         }
       />
     </SafeAreaView>
@@ -65,32 +97,50 @@ export default function MyDogsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { paddingHorizontal: 20, paddingVertical: 16 },
-  title: { fontSize: 24, fontWeight: '700', color: colors.text },
-  list: { paddingBottom: 24 },
-  addCard: {
-    marginHorizontal: 16,
-    marginVertical: 12,
-    padding: 20,
-    backgroundColor: colors.card,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: colors.card,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
-  addIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  title: { fontSize: 22, fontWeight: '800', color: colors.text },
+  addBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
   },
-  addIconText: { fontSize: 28, color: colors.primary, fontWeight: '300' },
-  addTitle: { fontSize: 18, fontWeight: '600', color: colors.text },
-  addSubtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
-  empty: { padding: 40, alignItems: 'center' },
-  emptyText: { fontSize: 16, color: colors.textSecondary },
+  list: { paddingBottom: 24 },
+  addCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginHorizontal: 16,
+    marginVertical: 12,
+    padding: 16,
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: colors.primary + '40',
+    borderStyle: 'dashed',
+  },
+  addIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
+  addSubtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
+  empty: { padding: 48, alignItems: 'center', gap: 8 },
+  emptyTitle: { fontSize: 17, fontWeight: '600', color: colors.text, marginTop: 8 },
+  emptySubtitle: { fontSize: 14, color: colors.textSecondary, textAlign: 'center' },
 });

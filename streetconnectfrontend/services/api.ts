@@ -46,6 +46,8 @@ export const apiService = {
     request<any>('PUT', '/users/profile', { onboarding_completed: true }),
   updateRole: (role: string) =>
     request<any>('PUT', '/users/profile', { role }),
+  updateProfile: (data: { avatar_url?: string; name?: string; bio?: string }) =>
+    request<any>('PUT', '/users/profile', data),
   getAllUsers: (params?: any) =>
     request<{ users: any[] }>('GET', `/users${params ? '?' + new URLSearchParams(params) : ''}`),
 
@@ -77,7 +79,7 @@ export const apiService = {
     request<void>('PUT', `/chat/messages/${messageId}/read`),
   getUnreadMessageCount: () => request<{ unread_count: number }>('GET', '/chat/unread-count'),
 
-  // Upload (Supabase signed URL flow)
+  // Upload
   getSignedUploadUrl: (fileType: string, folder: string) =>
     request<any>('POST', '/upload/signed-url', { file_type: fileType, folder }),
   uploadToS3: (uploadUrl: string, blob: Blob) =>
@@ -90,6 +92,8 @@ export const apiService = {
     request<{ reports: any[] }>('GET', `/reports/nearby?${new URLSearchParams(params as any)}`),
   getMyReports: (params?: any) =>
     request<{ reports: any[] }>('GET', `/reports/my-reports?${params ? new URLSearchParams(params) : ''}`),
+  getDogReports: (dogId: string) =>
+    request<{ reports: any[] }>('GET', `/reports/dog/${dogId}`),
   updateReport: (id: string, data: any) => request<any>('PUT', `/reports/${id}`, data),
   deleteReport: (id: string) => request<void>('DELETE', `/reports/${id}`),
 

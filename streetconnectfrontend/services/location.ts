@@ -60,6 +60,22 @@ export const locationService = {
     }
   },
 
+  async geocodeAddress(address: string): Promise<{ latitude: number; longitude: number; name: string }[]> {
+    try {
+      const results = await ExpoLocation.geocodeAsync(address);
+      const named = await Promise.all(
+        results.slice(0, 5).map(async (r) => {
+          const rev = await ExpoLocation.reverseGeocodeAsync({ latitude: r.latitude, longitude: r.longitude });
+          const parts = [rev[0]?.name, rev[0]?.street, rev[0]?.city].filter(Boolean);
+          return { latitude: r.latitude, longitude: r.longitude, name: parts.join(', ') || address };
+        })
+      );
+      return named;
+    } catch {
+      return [];
+    }
+  },
+
   watchPosition(callback: (location: Location) => void): { remove: () => void } {
     let subscription: ExpoLocation.LocationSubscription | null = null;
 
