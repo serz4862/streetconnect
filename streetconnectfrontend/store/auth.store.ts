@@ -13,7 +13,7 @@ interface AuthState {
   setUser: (user: User | null) => void;
   setToken: (token: string | null) => void;
   phoneLogin: (data: { phone: string; country_code: string; otp: string; name?: string; pincode?: string }) => Promise<void>;
-  login: (phone: string, firebaseToken: string) => Promise<void>;
+  login: (phone: string) => Promise<void>;
   signup: (data: any) => Promise<void>;
   logout: () => Promise<void>;
   loadUser: () => Promise<void>;
@@ -55,10 +55,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  login: async (phone, firebaseToken) => {
+  login: async (phone) => {
     set({ isLoading: true, error: null });
     try {
-      const response: any = await apiService.login({ phone, firebase_token: firebaseToken });
+      const response: any = await apiService.login({ phone });
       const { user, token } = response;
       
       await storage.setToken(token);

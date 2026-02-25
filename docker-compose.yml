@@ -1,24 +1,4 @@
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: streetconnect_postgres
-    restart: always
-    environment:
-      POSTGRES_USER: streetconnect
-      POSTGRES_PASSWORD: streetconnect_secure_password
-      POSTGRES_DB: streetconnect_db
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - streetconnect_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U streetconnect"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: streetconnect_redis
@@ -45,13 +25,14 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8000
-      DATABASE_URL: postgres://streetconnect:streetconnect_secure_password@postgres:5432/streetconnect_db
       REDIS_URL: redis://redis:6379
+      # Supabase credentials
+      SUPABASE_URL: https://jqgemewsbmwhckajxjkn.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpxZ2VtZXdzYm13aGNrYWp4amtuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDE5OTk4NywiZXhwIjoyMDg1Nzc1OTg3fQ.1jHFPgqdMFdfvndRQCYjl-j283IbuooG4C5_xYIYATQ
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpxZ2VtZXdzYm13aGNrYWp4amtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxOTk5ODcsImV4cCI6MjA4NTc3NTk4N30.9zUq4zCZfJCC00KkKy7bjn89-DL01YOyUNyM77A73X4
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -61,7 +42,6 @@ services:
       - /app/node_modules
 
 volumes:
-  postgres_data:
   redis_data:
 
 networks:

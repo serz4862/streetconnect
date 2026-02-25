@@ -1,3 +1,7 @@
+// Fix ISP DNS hijacking: force Google + Cloudflare DNS before ANY network calls
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -8,7 +12,6 @@ import 'express-async-errors';
 import { config } from './config';
 import { connectDatabase } from './config/database';
 import { redisClient } from './config/redis';
-import firebaseService from './services/firebase.service';
 import logger from './utils/logger';
 import routes from './routes';
 import { errorHandler, notFound } from './middleware/errorHandler';
@@ -79,13 +82,7 @@ app.use(errorHandler);
 // Start server
 const startServer = async (): Promise<void> => {
   try {
-    try {
-      firebaseService.initialize();
-    } catch (err) {
-      logger.warn('Firebase init failed (optional for dev):', err);
-    }
-
-    // Connect to database (Supabase or Sequelize)
+    // Connect to database (Supabase only)
     await connectDatabase();
 
     // Test Redis connection (optional - app works without it)

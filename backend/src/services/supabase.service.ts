@@ -1,6 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import dns from 'dns';
 import { config } from '../config';
 import logger from '../utils/logger';
+
+// ISP DNS hijacking fix: use Google + Cloudflare DNS so Supabase URLs resolve correctly.
+dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
 
 class SupabaseService {
   private client: SupabaseClient;

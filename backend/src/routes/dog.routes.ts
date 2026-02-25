@@ -5,6 +5,7 @@ import 'express-async-errors';
 
 const router = Router();
 
+router.post('/validate-image', authenticate, (req, res) => dogController.validateImage(req, res));
 router.post('/', authenticate, (req, res) => dogController.createDog(req, res));
 router.get('/nearby', authenticate, (req, res) => dogController.getNearbyDogs(req, res));
 router.get('/my-dogs', authenticate, (req, res) => dogController.getMyDogs(req, res));

@@ -6,6 +6,7 @@ import 'express-async-errors';
 
 const router = Router();
 
+router.post('/send-otp', authLimiter, (req, res) => authController.sendOtp(req, res));
 router.post('/phone-login', authLimiter, (req, res) => authController.phoneLogin(req, res));
 router.post('/signup', authLimiter, (req, res) => authController.signup(req, res));
 router.post('/login', authLimiter, (req, res) => authController.login(req, res));

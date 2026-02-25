@@ -4,7 +4,9 @@
 
 import { storage } from './storage';
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'http://localhost:3000/api/v1';
+import Constants from 'expo-constants';
+
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || Constants.expoConfig?.extra?.apiUrl || 'http://localhost:8000/api/v1';
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
@@ -31,8 +33,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const apiService = {
   // Auth
+  sendOtp: (data: { phone: string; country_code: string }) =>
+    request<any>('POST', '/auth/send-otp', data),
   phoneLogin: (data: any) => request<any>('POST', '/auth/phone-login', data),
-  login: (data: { phone: string; firebase_token: string }) =>
+  login: (data: { phone: string }) =>
     request<any>('POST', '/auth/login', data),
   signup: (data: any) => request<any>('POST', '/auth/signup', data),
   logout: () => request<void>('POST', '/auth/logout'),
@@ -46,6 +50,8 @@ export const apiService = {
     request<{ users: any[] }>('GET', `/users${params ? '?' + new URLSearchParams(params) : ''}`),
 
   // Dogs
+  validateDogImage: (image_url: string) =>
+    request<{ valid: boolean }>('POST', '/dogs/validate-image', { image_url }),
   getNearbyDogs: (params: any) =>
     request<{ dogs: any[] }>('GET', `/dogs/nearby?${new URLSearchParams(params as any)}`),
   getMyDogs: () => request<{ dogs: any[] }>('GET', '/dogs/my-dogs'),
@@ -86,6 +92,15 @@ export const apiService = {
     request<{ reports: any[] }>('GET', `/reports/my-reports?${params ? new URLSearchParams(params) : ''}`),
   updateReport: (id: string, data: any) => request<any>('PUT', `/reports/${id}`, data),
   deleteReport: (id: string) => request<void>('DELETE', `/reports/${id}`),
+
+  // Saved Locations
+  getSavedLocations: () => request<{ locations: any[] }>('GET', '/locations'),
+  saveLocation: (data: { label: string; latitude: number; longitude: number; location_name?: string; is_default?: boolean }) =>
+    request<any>('POST', '/locations', data),
+  updateSavedLocation: (id: string, data: Partial<{ label: string; latitude: number; longitude: number; location_name?: string; is_default?: boolean }>) =>
+    request<any>('PUT', `/locations/${id}`, data),
+  deleteSavedLocation: (id: string) => request<void>('DELETE', `/locations/${id}`),
+  setDefaultLocation: (id: string) => request<any>('POST', `/locations/${id}/set-default`),
 
   // Notifications
   getNotifications: (params?: any) =>

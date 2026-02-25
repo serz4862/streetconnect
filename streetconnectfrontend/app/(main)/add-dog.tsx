@@ -11,6 +11,7 @@ import { useImageUpload } from '../../hooks/useImageUpload';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import { colors } from '../../constants';
+import { apiService } from '../../services/api';
 
 const schema = z.object({
   name: z.string().optional(),
@@ -33,6 +34,9 @@ export default function AddDogScreen() {
   const { currentLocation } = useLocationStore();
   const { pickImage, takePhoto, uploadImage, isUploading } = useImageUpload();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageValidating, setImageValidating] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const {
     control,
@@ -47,31 +51,39 @@ export default function AddDogScreen() {
     },
   });
 
+  const processImage = async (uri: string) => {
+    setImageError(null);
+    setImageUrl(null);
+    setImageValidating(true);
+    try {
+      const url = await uploadImage(uri, 'dogs');
+      // Validate right after upload — before user fills the form
+      try {
+        await apiService.validateDogImage(url);
+        setImageUrl(url);
+      } catch (err: any) {
+        const msg = err?.error?.error ?? err?.message ?? 'This is not a dog. Please upload a photo of a dog.';
+        setImageError(msg);
+      }
+    } catch (err: any) {
+      setImageError(err?.message ?? 'Failed to upload image.');
+    } finally {
+      setImageValidating(false);
+    }
+  };
+
   const handlePickImage = async () => {
     const asset = await pickImage();
-    if (asset?.uri) {
-      try {
-        const url = await uploadImage(asset.uri, 'dogs');
-        setImageUrl(url);
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    if (asset?.uri) await processImage(asset.uri);
   };
 
   const handleTakePhoto = async () => {
     const asset = await takePhoto();
-    if (asset?.uri) {
-      try {
-        const url = await uploadImage(asset.uri, 'dogs');
-        setImageUrl(url);
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    if (asset?.uri) await processImage(asset.uri);
   };
 
   const onSubmit = async (data: FormData) => {
+    setSubmitError(null);
     const lat = currentLocation?.latitude ?? 28.5355;
     const lng = currentLocation?.longitude ?? 77.3910;
     try {
@@ -87,8 +99,9 @@ export default function AddDogScreen() {
         });
         router.replace(`/(main)/dog/${res.dog?.id}`);
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      const message = err?.error?.error ?? err?.error?.message ?? err?.message ?? 'Something went wrong.';
+      setSubmitError(message);
     }
   };
 
@@ -102,13 +115,23 @@ export default function AddDogScreen() {
       </View>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <View style={styles.photoRow}>
-          <TouchableOpacity style={styles.photoBox} onPress={handleTakePhoto}>
-            <Text style={styles.photoText}>{imageUrl ? 'Retake photo' : 'Take photo'}</Text>
+          <TouchableOpacity style={styles.photoBox} onPress={handleTakePhoto} disabled={imageValidating || isUploading}>
+            <Text style={styles.photoText}>
+              {imageValidating || isUploading ? 'Checking...' : imageUrl ? 'Retake photo' : 'Take photo'}
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.photoBox} onPress={handlePickImage}>
-            <Text style={styles.photoText}>{imageUrl ? 'Change from gallery' : 'Choose from gallery'}</Text>
+          <TouchableOpacity style={styles.photoBox} onPress={handlePickImage} disabled={imageValidating || isUploading}>
+            <Text style={styles.photoText}>
+              {imageValidating || isUploading ? 'Checking...' : imageUrl ? 'Change from gallery' : 'Choose from gallery'}
+            </Text>
           </TouchableOpacity>
         </View>
+        {imageUrl ? (
+          <Text style={styles.imageSuccess}>Dog photo added</Text>
+        ) : null}
+        {imageError ? (
+          <Text style={styles.errorText}>{imageError}</Text>
+        ) : null}
 
         <Controller control={control} name="name" render={({ field }) => <Input label="Name" placeholder="Dog name" value={field.value} onChangeText={field.onChange} error={errors.name?.message} />} />
         <Controller control={control} name="color" render={({ field }) => <Input label="Color" placeholder="e.g. Golden" value={field.value} onChangeText={field.onChange} />} />
@@ -163,7 +186,16 @@ export default function AddDogScreen() {
         />
         <Controller control={control} name="health_notes" render={({ field }) => <Input label="Health notes" placeholder="Optional" value={field.value} onChangeText={field.onChange} />} />
 
-        <Button title="Add Dog" variant="primary" size="large" fullWidth loading={createDog.isPending || isUploading} onPress={handleSubmit(onSubmit)} />
+        {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
+
+        <Button
+          title="Add Dog"
+          variant="primary"
+          size="large"
+          fullWidth
+          loading={createDog.isPending || isUploading || imageValidating}
+          onPress={handleSubmit(onSubmit)}
+        />
       </ScrollView>
     </SafeAreaView>
   );
@@ -187,4 +219,6 @@ const styles = StyleSheet.create({
   radioActive: { backgroundColor: colors.primary },
   radioText: { fontSize: 14, color: colors.text },
   radioTextActive: { color: colors.textOnPrimary, fontWeight: '600' },
+  errorText: { fontSize: 14, color: colors.error, marginBottom: 8 },
+  imageSuccess: { fontSize: 13, color: colors.success, marginBottom: 8 },
 });

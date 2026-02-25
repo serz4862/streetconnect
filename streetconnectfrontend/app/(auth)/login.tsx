@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import { colors } from '../../constants';
+import { apiService } from '../../services/api';
 
 const loginSchema = z.object({
   phone: z.string().min(10, 'Enter valid 10-digit mobile number').max(10),
@@ -18,6 +19,7 @@ type LoginForm = z.infer<typeof loginSchema>;
 export default function LoginScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const {
     control,
@@ -28,17 +30,25 @@ export default function LoginScreen() {
     defaultValues: { phone: '' },
   });
 
-  const onSubmit = (data: LoginForm) => {
+  const onSubmit = async (data: LoginForm) => {
+    setError(null);
     setLoading(true);
-    router.push({
-      pathname: '/(auth)/verify-otp',
-      params: {
-        phone: data.phone,
-        country_code: '+91',
-        flow: 'login',
-      },
-    });
-    setLoading(false);
+    try {
+      await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
+      router.push({
+        pathname: '/(auth)/verify-otp',
+        params: {
+          phone: data.phone,
+          country_code: '+91',
+          flow: 'login',
+        },
+      });
+    } catch (err: any) {
+      const msg = err?.error?.error ?? err?.message ?? 'Failed to send OTP. Try again.';
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -73,6 +83,8 @@ export default function LoginScreen() {
               />
             )}
           />
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <Button
             title="Get OTP"
@@ -120,6 +132,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '700', color: colors.text, marginBottom: 8 },
   subtitle: { fontSize: 16, color: colors.textSecondary, marginBottom: 24 },
   countryCode: { fontSize: 16, color: colors.text, fontWeight: '600' },
+  errorText: { fontSize: 14, color: colors.error, marginBottom: 12 },
   footer: { marginTop: 24, textAlign: 'center', fontSize: 14, color: colors.textSecondary },
   link: { color: colors.primary, fontWeight: '600' },
 });

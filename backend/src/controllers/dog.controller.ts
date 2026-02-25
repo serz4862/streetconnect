@@ -8,6 +8,7 @@ import { AppError } from '../middleware/errorHandler';
 import qrcodeService from '../services/qrcode.service';
 import pdfService from '../services/pdf.service';
 import { supabase } from '../services/supabase.service';
+import { isDogImage } from '../services/vision.service';
 
 const createDogSchema = z.object({
   name: z.string().optional(),
@@ -40,9 +41,26 @@ function getBoundingBox(lat: number, lng: number, radiusKm: number) {
 }
 
 export class DogController {
+  /** Quick check: is this image URL a dog? Used by frontend right after upload. */
+  async validateImage(req: AuthRequest, res: Response): Promise<void> {
+    const { image_url } = z.object({ image_url: z.string().url() }).parse(req.body);
+    const ok = await isDogImage(image_url);
+    if (!ok) {
+      throw new AppError('This is not a dog. Please upload a photo of a dog.', 400);
+    }
+    res.json({ valid: true, message: 'Image is a dog' });
+  }
+
   async createDog(req: AuthRequest, res: Response): Promise<void> {
     const userId = req.user!.id;
     const data = createDogSchema.parse(req.body);
+
+    if (data.image_url) {
+      const ok = await isDogImage(data.image_url);
+      if (!ok) {
+        throw new AppError('This is not a dog. Please upload a photo of a dog.', 400);
+      }
+    }
 
     const { data: dog, error: createError } = await supabase
       .from('dogs')
@@ -138,6 +156,13 @@ export class DogController {
   async updateDog(req: AuthRequest, res: Response): Promise<void> {
     const { id } = req.params;
     const data = updateDogSchema.parse(req.body);
+
+    if (data.image_url) {
+      const ok = await isDogImage(data.image_url);
+      if (!ok) {
+        throw new AppError('This is not a dog. Please upload a photo of a dog.', 400);
+      }
+    }
 
     const { data: dog, error } = await supabase
       .from('dogs')

@@ -235,6 +235,17 @@ export default function ProfileScreen() {
             />
           </View>
 
+          <TouchableOpacity
+            style={styles.settingItem}
+            onPress={() => router.push('/(main)/saved-locations')}
+          >
+            <View style={styles.settingContent}>
+              <Text style={styles.settingTitle}>Saved Locations</Text>
+              <Text style={styles.settingSubtitle}>Manage your saved locations</Text>
+            </View>
+            <Text style={styles.actionArrow}>›</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>Privacy</Text>

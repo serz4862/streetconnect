@@ -4,12 +4,12 @@ import { z } from 'zod';
 import { UserRole } from '../models/User';
 import { config } from '../config';
 import { RedisCache } from '../config/redis';
-import firebaseService from '../services/firebase.service';
 import { AppError } from '../middleware/errorHandler';
 import { supabase } from '../services/supabase.service';
+import logger from '../utils/logger';
 
+// Signup schema - uses phone OTP instead of Firebase
 const signupSchema = z.object({
-  firebase_token: z.string(),
   phone: z.string().min(10),
   country_code: z.string(),
   name: z.string().min(2).max(100),
@@ -22,9 +22,14 @@ const signupSchema = z.object({
   location_name: z.string().optional(),
 });
 
+// Login schema - uses phone OTP instead of Firebase
 const loginSchema = z.object({
-  firebase_token: z.string(),
   phone: z.string().min(10),
+});
+
+const sendOtpSchema = z.object({
+  phone: z.string().min(10).max(15),
+  country_code: z.string().min(1),
 });
 
 const phoneLoginSchema = z.object({
@@ -35,19 +40,51 @@ const phoneLoginSchema = z.object({
   pincode: z.string().optional(),
 });
 
-const VALID_DEV_OTPS = ['0000', '000000']; // Dev OTPs for testing - both 4 and 6 zeros work
+const OTP_TTL_SECONDS = 300; // 5 minutes
+const OTP_REDIS_PREFIX = 'otp:';
+
+function normalizePhone(phone: string, countryCode: string): string {
+  const phoneDigits = phone.replace(/\D/g, '');
+  return phoneDigits.length === 10 && countryCode === '+91' ? `91${phoneDigits}` : phoneDigits;
+}
+
+function generateOtp(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
 
 export class AuthController {
+  /**
+   * Send OTP to phone. In development: do NOT send SMS; log OTP in terminal and return in response.
+   */
+  async sendOtp(req: Request, res: Response): Promise<void> {
+    const data = sendOtpSchema.parse(req.body);
+    const lookupPhone = normalizePhone(data.phone, data.country_code);
+    const otp = generateOtp();
+
+    await RedisCache.set(`${OTP_REDIS_PREFIX}${lookupPhone}`, otp, OTP_TTL_SECONDS);
+
+    const isDev = config.env === 'development';
+    if (isDev) {
+      logger.info(`[DEV] OTP for ${data.country_code}${data.phone} (key: ${lookupPhone}): ${otp}`);
+      res.json({ message: 'OTP sent', otp });
+      return;
+    }
+
+    // Production: send SMS via your provider (Twilio, MSG91, etc.). For now we only support dev flow.
+    res.json({ message: 'OTP sent' });
+  }
+
   async phoneLogin(req: Request, res: Response): Promise<void> {
     const data = phoneLoginSchema.parse(req.body);
 
-    if (!VALID_DEV_OTPS.includes(data.otp)) {
+    const lookupPhone = normalizePhone(data.phone, data.country_code);
+    const storedOtp = await RedisCache.get<string>(`${OTP_REDIS_PREFIX}${lookupPhone}`);
+
+    if (!storedOtp || storedOtp !== data.otp) {
       throw new AppError('Invalid OTP', 401);
     }
 
-    // Normalize phone: DB stores "919735892566" for +91 9735892566
-    const phoneDigits = data.phone.replace(/\D/g, '');
-    const lookupPhone = phoneDigits.length === 10 && data.country_code === '+91' ? `91${phoneDigits}` : phoneDigits;
+    await RedisCache.del(`${OTP_REDIS_PREFIX}${lookupPhone}`);
 
     const { data: existingUser } = await supabase
       .from('users')
@@ -137,8 +174,7 @@ export class AuthController {
   async signup(req: Request, res: Response): Promise<void> {
     const data = signupSchema.parse(req.body);
 
-    // Verify Firebase token
-    const decodedToken = await firebaseService.verifyIdToken(data.firebase_token);
+    // Phone signup - no Firebase token needed (uses OTP verification instead)
 
     // Check if user already exists
     const { data: existingUser } = await supabase
@@ -165,7 +201,6 @@ export class AuthController {
         latitude: data.latitude,
         longitude: data.longitude,
         location_name: data.location_name,
-        firebase_uid: decodedToken.uid,
         is_verified: true,
         is_active: true,
       })
@@ -211,10 +246,8 @@ export class AuthController {
   async login(req: Request, res: Response): Promise<void> {
     const data = loginSchema.parse(req.body);
 
-    // Verify Firebase token
-    const decodedToken = await firebaseService.verifyIdToken(data.firebase_token);
-
-    // Find user
+    // Phone login - no Firebase token needed (uses OTP verification instead)
+    // Find user by phone
     const { data: user, error: findError } = await supabase
       .from('users')
       .select('*')
@@ -229,14 +262,10 @@ export class AuthController {
       throw new AppError('User account is inactive', 403);
     }
 
-    // Update Firebase UID if changed and last active
+    // Update last active timestamp
     const updates: any = {
       last_active_at: new Date().toISOString(),
     };
-
-    if (user.firebase_uid !== decodedToken.uid) {
-      updates.firebase_uid = decodedToken.uid;
-    }
 
     const { data: updatedUser, error: updateError } = await supabase
       .from('users')

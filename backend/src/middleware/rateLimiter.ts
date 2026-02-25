@@ -10,8 +10,9 @@ export const globalLimiter = rateLimit({
 });
 
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 requests per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  // Generous in dev (send-otp + phone-login per attempt); restrictive in prod
+  max: config.env === 'development' ? 100 : 10,
   message: 'Too many authentication attempts, please try again later',
   skipSuccessfulRequests: true,
 });

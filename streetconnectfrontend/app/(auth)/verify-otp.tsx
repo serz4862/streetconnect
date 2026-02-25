@@ -12,6 +12,7 @@ import { useAuthStore } from '../../store/auth.store';
 import Button from '../../components/common/Button';
 import ErrorModal from '../../components/common/ErrorModal';
 import { colors } from '../../constants';
+import { apiService } from '../../services/api';
 
 const OTP_LENGTH = 6; // Support both 0000 and 000000 for testing
 const RESEND_COOLDOWN = 10;
@@ -108,6 +109,16 @@ export default function VerifyOtpScreen() {
     }
   }, [otp, phone, countryCode, name, pincode, phoneLogin, router]);
 
+  const resendOtp = useCallback(async () => {
+    try {
+      await apiService.sendOtp({ phone, country_code: countryCode });
+      startResendCooldown();
+    } catch (_err) {
+      setError('Failed to resend OTP');
+      setShowErrorModal(true);
+    }
+  }, [phone, countryCode]);
+
   const startResendCooldown = useCallback(() => {
     setResendCooldown(RESEND_COOLDOWN);
     const id = setInterval(() => {
@@ -135,9 +146,9 @@ export default function VerifyOtpScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>Verify your mobile number</Text>
         <Text style={styles.subtitle}>
-          Enter the code we sent by SMS to {countryCode}-{phone}.
+          Enter the code sent to {countryCode}-{phone}.
         </Text>
-        <Text style={styles.hint}>For testing, enter 0000 or 000000</Text>
+        <Text style={styles.hint}>In dev, check the backend terminal for the OTP</Text>
 
         <View style={styles.otpRow}>
           {otp.map((digit, index) => (
@@ -183,12 +194,7 @@ export default function VerifyOtpScreen() {
           {resendCooldown > 0 ? (
             <Text style={styles.resendDisabled}>Resend OTP ({resendCooldown}s)</Text>
           ) : (
-            <Text
-              style={styles.resendLink}
-              onPress={() => {
-                startResendCooldown();
-              }}
-            >
+            <Text style={styles.resendLink} onPress={resendOtp}>
               Resend OTP
             </Text>
           )}

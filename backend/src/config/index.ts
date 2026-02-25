@@ -7,12 +7,14 @@ interface Config {
   port: number;
   apiVersion: string;
   database: {
+    // Not used - database is handled via Supabase
     url: string;
     pool: {
       max: number;
       min: number;
     };
   };
+  // Firebase no longer used (authentication is via phone OTP)
   redis: {
     url: string;
     ttl: number;
@@ -28,12 +30,6 @@ interface Config {
     expiresIn: string;
     refreshExpiresIn: string;
   };
-  firebase: {
-    projectId: string;
-    privateKey: string;
-    clientEmail: string;
-    databaseURL: string;
-  };
   aws: {
     region: string;
     accessKeyId: string;
@@ -48,6 +44,10 @@ interface Config {
     cluster: string;
   };
   googleMaps: {
+    apiKey: string;
+  };
+  /** Optional. When set, dog images are validated with Cloud Vision before save. */
+  googleCloudVision: {
     apiKey: string;
   };
   rateLimit: {
@@ -66,11 +66,12 @@ export const config: Config = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '8000', 10),
   apiVersion: process.env.API_VERSION || 'v1',
+  // Database is handled via Supabase - not used directly
   database: {
-    url: process.env.DATABASE_URL || 'postgres://localhost:5432/streetconnect_db',
+    url: '',
     pool: {
-      max: parseInt(process.env.DB_POOL_MAX || '20', 10),
-      min: parseInt(process.env.DB_POOL_MIN || '5', 10),
+      max: 20,
+      min: 5,
     },
   },
   redis: {
@@ -88,12 +89,8 @@ export const config: Config = {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   },
-  firebase: {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
-    databaseURL: process.env.FIREBASE_DATABASE_URL || '',
-  },
+  // Firebase no longer used (removed)
+  
   aws: {
     region: process.env.AWS_REGION || 'us-east-1',
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
@@ -109,6 +106,9 @@ export const config: Config = {
   },
   googleMaps: {
     apiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+  },
+  googleCloudVision: {
+    apiKey: process.env.GOOGLE_CLOUD_VISION_API_KEY || '',
   },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),

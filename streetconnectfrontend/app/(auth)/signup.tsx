@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import { colors } from '../../constants';
+import { apiService } from '../../services/api';
 
 const signupSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100),
@@ -20,6 +21,7 @@ type SignupForm = z.infer<typeof signupSchema>;
 export default function SignupScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const {
     control,
@@ -30,19 +32,27 @@ export default function SignupScreen() {
     defaultValues: { name: '', phone: '', pincode: '' },
   });
 
-  const onSubmit = (data: SignupForm) => {
+  const onSubmit = async (data: SignupForm) => {
+    setError(null);
     setLoading(true);
-    router.push({
-      pathname: '/(auth)/verify-otp',
-      params: {
-        phone: data.phone,
-        country_code: '+91',
-        name: data.name,
-        pincode: data.pincode,
-        flow: 'signup',
-      },
-    });
-    setLoading(false);
+    try {
+      await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
+      router.push({
+        pathname: '/(auth)/verify-otp',
+        params: {
+          phone: data.phone,
+          country_code: '+91',
+          name: data.name,
+          pincode: data.pincode,
+          flow: 'signup',
+        },
+      });
+    } catch (err: any) {
+      const msg = err?.error?.error ?? err?.message ?? 'Failed to send OTP. Try again.';
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -110,6 +120,8 @@ export default function SignupScreen() {
             )}
           />
 
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
           <Button
             title="Get OTP"
             variant="primary"
@@ -156,6 +168,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '700', color: colors.text, marginBottom: 8 },
   subtitle: { fontSize: 16, color: colors.textSecondary, marginBottom: 24 },
   countryCode: { fontSize: 16, color: colors.text, fontWeight: '600' },
+  errorText: { fontSize: 14, color: colors.error, marginBottom: 12 },
   footer: { marginTop: 24, textAlign: 'center', fontSize: 14, color: colors.textSecondary },
   link: { color: colors.primary, fontWeight: '600' },
 });

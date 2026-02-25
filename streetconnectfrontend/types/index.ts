@@ -132,6 +132,18 @@ export interface Location {
   speed?: number | null;
 }
 
+export interface SavedLocation {
+  id: string;
+  user_id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
+  location_name?: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiResponse<T> {
   data?: T;
   message?: string;

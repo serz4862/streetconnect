@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet,  TouchableOpacity } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useLocationStore } from '../../store/location.store';
@@ -7,12 +7,24 @@ import { useAuthStore } from '../../store/auth.store';
 import { apiService } from '../../services/api';
 import Button from '../../components/common/Button';
 import { colors } from '../../constants';
+import { SavedLocation } from '../../types';
 
 export default function LocationScreen() {
   const router = useRouter();
-  const { requestPermission, getCurrentLocation } = useLocationStore();
+  const {
+    requestPermission,
+    getCurrentLocation,
+    savedLocations,
+    savedLocationsLoaded,
+    loadSavedLocations,
+    useLocation: useSavedLocation,
+  } = useLocationStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!savedLocationsLoaded) loadSavedLocations();
+  }, []);
 
   const handleUseMyLocation = async () => {
     setLoading(true);
@@ -33,7 +45,6 @@ export default function LocationScreen() {
           longitude: loc.longitude,
           location_name: name || undefined,
         });
-        // Don't complete onboarding yet - role selection is still needed
         useAuthStore.getState().updateUser({
           ...useAuthStore.getState().user!,
           latitude: loc.latitude,
@@ -46,6 +57,30 @@ export default function LocationScreen() {
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to get location');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUseSaved = async (item: SavedLocation) => {
+    setLoading(true);
+    setError(null);
+    try {
+      useSavedLocation(item);
+      await apiService.updateLocation({
+        latitude: item.latitude,
+        longitude: item.longitude,
+        location_name: item.location_name ?? item.label,
+      });
+      useAuthStore.getState().updateUser({
+        ...useAuthStore.getState().user!,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        location_name: item.location_name ?? item.label,
+      });
+      router.replace('/(onboarding)/role-selection');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to use location');
     } finally {
       setLoading(false);
     }
@@ -76,7 +111,7 @@ export default function LocationScreen() {
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <Button
-          title={loading ? '' : 'Use My Location'}
+          title={loading ? '' : 'Use My Current Location'}
           variant="primary"
           size="large"
           fullWidth
@@ -90,6 +125,31 @@ export default function LocationScreen() {
           fullWidth
           onPress={() => router.push('/(onboarding)/set-location')}
         />
+
+        {savedLocations.length > 0 && (
+          <View style={styles.savedSection}>
+            <Text style={styles.savedTitle}>Use a saved location</Text>
+            {savedLocations.map((loc) => (
+              <TouchableOpacity
+                key={loc.id}
+                style={styles.savedItem}
+                onPress={() => handleUseSaved(loc)}
+                disabled={loading}
+              >
+                <View style={styles.savedItemInfo}>
+                  <Text style={styles.savedLabel}>{loc.label}</Text>
+                  {loc.location_name ? (
+                    <Text style={styles.savedName} numberOfLines={1}>{loc.location_name}</Text>
+                  ) : null}
+                </View>
+                {loc.is_default && (
+                  <View style={styles.defaultBadge}><Text style={styles.defaultText}>Default</Text></View>
+                )}
+                <Text style={styles.savedArrow}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -129,4 +189,27 @@ const styles = StyleSheet.create({
   mapEmoji: { fontSize: 64 },
   pinEmoji: { fontSize: 48, marginTop: 8 },
   errorText: { color: colors.error, fontSize: 14, marginBottom: 12 },
+  savedSection: { marginTop: 24, gap: 8 },
+  savedTitle: { fontSize: 14, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 },
+  savedItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 8,
+  },
+  savedItemInfo: { flex: 1, gap: 2 },
+  savedLabel: { fontSize: 15, fontWeight: '600', color: colors.text },
+  savedName: { fontSize: 13, color: colors.textSecondary },
+  savedArrow: { fontSize: 20, color: colors.textLight },
+  defaultBadge: {
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  defaultText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
 });
