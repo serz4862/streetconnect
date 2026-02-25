@@ -34,13 +34,15 @@ export default function LoginScreen() {
     setError(null);
     setLoading(true);
     try {
-      await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
+      const res: any = await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
       router.push({
         pathname: '/(auth)/verify-otp',
         params: {
           phone: data.phone,
           country_code: '+91',
           flow: 'login',
+          // dev_otp is set by backend in development mode — pre-fills OTP field
+          dev_otp: res?.otp ?? '',
         },
       });
     } catch (err: any) {

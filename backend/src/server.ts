@@ -24,7 +24,11 @@ const app: Application = express();
 
 // Security middleware
 app.use(helmet());
-app.use(cors({ origin: config.cors.origin, credentials: true }));
+// In development allow all origins so Expo Go on any WiFi IP works without restarting backend
+const corsOptions = config.env === 'development'
+  ? { origin: true, credentials: true }
+  : { origin: config.cors.origin, credentials: true };
+app.use(cors(corsOptions));
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));

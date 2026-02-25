@@ -13,7 +13,6 @@ import { apiService } from '../../services/api';
 const signupSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100),
   phone: z.string().min(10, 'Enter valid 10-digit mobile number').max(10),
-  pincode: z.string().min(6, 'Pincode must be 6 digits').max(6),
 });
 
 type SignupForm = z.infer<typeof signupSchema>;
@@ -29,22 +28,23 @@ export default function SignupScreen() {
     formState: { errors },
   } = useForm<SignupForm>({
     resolver: zodResolver(signupSchema),
-    defaultValues: { name: '', phone: '', pincode: '' },
+    defaultValues: { name: '', phone: '' },
   });
 
   const onSubmit = async (data: SignupForm) => {
     setError(null);
     setLoading(true);
     try {
-      await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
+      const res: any = await apiService.sendOtp({ phone: data.phone, country_code: '+91' });
       router.push({
         pathname: '/(auth)/verify-otp',
         params: {
           phone: data.phone,
           country_code: '+91',
           name: data.name,
-          pincode: data.pincode,
+
           flow: 'signup',
+          dev_otp: res?.otp ?? '',
         },
       });
     } catch (err: any) {
@@ -104,21 +104,7 @@ export default function SignupScreen() {
               />
             )}
           />
-          <Controller
-            control={control}
-            name="pincode"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Pincode"
-                placeholder="110045"
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/\D/g, '').slice(0, 6))}
-                onBlur={onBlur}
-                error={errors.pincode?.message}
-                keyboardType="number-pad"
-              />
-            )}
-          />
+
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
