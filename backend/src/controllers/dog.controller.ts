@@ -45,6 +45,58 @@ function getBoundingBox(lat: number, lng: number, radiusKm: number) {
   };
 }
 
+/**
+ * Normalise a dog DB row so the mobile app always sees consistent fields:
+ *  - image_url (some seed rows used photo_url)
+ *  - age_approx in years (some seeds stored age_months)
+ *  - numeric lat/lng (DB may return strings)
+ *  - health_status mapped to the allowed frontend enum values
+ *  - is_sterilized always boolean
+ */
+function normalizeDog(d: Record<string, unknown>): Record<string, unknown> {
+  if (!d || typeof d !== 'object') return d ?? {};
+
+  const image_url =
+    (d.image_url as string | undefined) || (d.photo_url as string | undefined) || undefined;
+
+  let age_approx: number | undefined;
+  if (d.age_approx != null && d.age_approx !== '') {
+    const n = Number(d.age_approx);
+    if (!Number.isNaN(n)) age_approx = n;
+  } else if (d.age_months != null && d.age_months !== '') {
+    const months = Number(d.age_months);
+    if (!Number.isNaN(months)) age_approx = Math.max(0, Math.min(30, Math.round(months / 12)));
+  }
+
+  const latitude = d.latitude != null ? Number(d.latitude) : d.latitude;
+  const longitude = d.longitude != null ? Number(d.longitude) : d.longitude;
+
+  const rawHealth = String(d.health_status ?? 'unknown');
+  const healthMap: Record<string, string> = { needs_attention: 'sick' };
+  const allowed = new Set(['healthy', 'sick', 'injured', 'critical', 'unknown']);
+  const health_status = allowed.has(rawHealth)
+    ? rawHealth
+    : allowed.has(healthMap[rawHealth] ?? '')
+      ? healthMap[rawHealth]
+      : 'unknown';
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { photo_url: _p, age_months: _m, ...rest } = d;
+  return {
+    ...rest,
+    image_url,
+    age_approx,
+    latitude,
+    longitude,
+    health_status,
+    is_sterilized: Boolean(d.is_sterilized),
+  };
+}
+
+function normalizeDogs(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return (rows || []).map(normalizeDog);
+}
+
 export class DogController {
   /** Quick check: is this image URL a dog? Used by frontend right after upload. */
   async validateImage(req: AuthRequest, res: Response): Promise<void> {
@@ -96,7 +148,6 @@ export class DogController {
       throw new AppError(`Failed to save QR code: ${updateError.message}`, 500);
     }
 
-    // Add creator as caretaker if specified
     if (data.caretaker_type) {
       await supabase.from('dog_caretakers').insert({
         dog_id: dog.id,
@@ -107,8 +158,6 @@ export class DogController {
     }
 
     await RedisCache.geoadd('dogs:locations', data.longitude, data.latitude, dog.id);
-    await RedisCache.set(`dog:${dog.id}`, { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId }, 3600);
-    await RedisCache.delPattern('dogs:nearby:*');
 
     await logDogActivity(
       dog.id,
@@ -119,7 +168,10 @@ export class DogController {
       { health_status: data.health_status ?? 'unknown', location: data.location_name },
     );
 
-    const finalDog = { ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId };
+    const finalDog = normalizeDog({ ...dog, qr_code_url: qrCodeUrl, qr_code_id: qrCodeId });
+    await RedisCache.set(`dog:${dog.id}`, finalDog, 3600);
+    await RedisCache.delPattern('dogs:nearby:*');
+
     res.status(201).json({
       message: 'Dog created successfully',
       dog: finalDog,
@@ -160,8 +212,10 @@ export class DogController {
         });
       }
 
-      dog = { ...dogData, creator, caretakers };
+      dog = normalizeDog({ ...dogData, creator, caretakers });
       await RedisCache.set(`dog:${id}`, dog, 3600);
+    } else {
+      dog = normalizeDog(dog as Record<string, unknown>);
     }
 
     res.json({ dog });
@@ -180,7 +234,6 @@ export class DogController {
       }
     }
 
-    // Fetch current values to detect changes for activity log
     const { data: before } = await supabase.from('dogs').select('*').eq('id', id).single();
 
     const { data: dog, error } = await supabase
@@ -194,7 +247,6 @@ export class DogController {
       throw new AppError('Dog not found', 404);
     }
 
-    // Log appropriate activity based on what changed
     if (before) {
       if ('is_lost' in data) {
         if (data.is_lost && !before.is_lost) {
@@ -218,7 +270,8 @@ export class DogController {
       }
     }
 
-    await RedisCache.del(`dog:${id}`);
+    const normalized = normalizeDog(dog as Record<string, unknown>);
+    await RedisCache.set(`dog:${id}`, normalized, 3600);
     if (data.latitude && data.longitude) {
       await RedisCache.geoadd('dogs:locations', data.longitude, data.latitude, id);
     }
@@ -226,7 +279,7 @@ export class DogController {
 
     res.json({
       message: 'Dog updated successfully',
-      dog,
+      dog: normalized,
     });
   }
 
@@ -238,7 +291,7 @@ export class DogController {
     const color = req.query.color as string | undefined;
     const is_sterilized = req.query.is_sterilized === 'true' ? true : undefined;
 
-    if (!latitude || !longitude) {
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       throw new AppError('Latitude and longitude required', 400);
     }
 
@@ -271,11 +324,13 @@ export class DogController {
         const creatorIds = [...new Set(rawDogs.map((d: any) => d.created_by))];
         const { data: creators } = await supabase.from('users').select('id, name, avatar_url').in('id', creatorIds);
         const creatorMap = (creators || []).reduce((acc: any, c) => { acc[c.id] = c; return acc; }, {});
-        dogs = rawDogs.map((d: any) => ({ ...d, creator: creatorMap[d.created_by] }));
+        dogs = normalizeDogs(rawDogs.map((d: any) => ({ ...d, creator: creatorMap[d.created_by] })));
       } else {
         dogs = [];
       }
       await RedisCache.set(cacheKey, dogs, 300);
+    } else {
+      dogs = normalizeDogs(dogs);
     }
 
     res.json({
@@ -318,7 +373,7 @@ export class DogController {
       });
     }
 
-    const result = { ...dogData, creator, caretakers };
+    const result = normalizeDog({ ...dogData, creator, caretakers });
     await RedisCache.set(`dog:${dogData.id}`, result, 3600);
 
     res.json({
@@ -404,14 +459,16 @@ export class DogController {
     const { data: creators } = await supabase.from('users').select('id, name, avatar_url').in('id', creatorIds);
     const creatorMap = (creators || []).reduce((acc: any, c) => { acc[c.id] = c; return acc; }, {});
 
-    const dogs = records
-      .filter((r: any) => dogMap[r.dog_id])
-      .map((record: any) => ({
-        ...dogMap[record.dog_id],
-        creator: creatorMap[dogMap[record.dog_id].created_by],
-        my_caretaker_type: record.caretaker_type,
-        is_primary: record.is_primary,
-      }));
+    const dogs = normalizeDogs(
+      records
+        .filter((r: any) => dogMap[r.dog_id])
+        .map((record: any) => ({
+          ...dogMap[record.dog_id],
+          creator: creatorMap[dogMap[record.dog_id].created_by],
+          my_caretaker_type: record.caretaker_type,
+          is_primary: record.is_primary,
+        }))
+    );
 
     res.json({ dogs });
   }
