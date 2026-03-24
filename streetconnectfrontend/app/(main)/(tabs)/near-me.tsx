@@ -11,20 +11,23 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import MapView, { Marker } from 'react-native-maps';
+import { useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocationStore } from '../../../store/location.store';
 import { useDogs } from '../../../hooks/useDogs';
-import DogCard from '../../../components/dog/DogCard';
+import SwipeableDogCard from '../../../components/dog/SwipeableDogCard';
 import { colors, RADIUS_OPTIONS } from '../../../constants';
 import { Dog } from '../../../types';
+import { apiService } from '../../../services/api';
 
 const { height } = Dimensions.get('window');
 const MAP_HEIGHT = height * 0.35;
 
 export default function NearMeScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { currentLocation, getCurrentLocation, locationName } = useLocationStore();
   const [radius, setRadius] = useState(5);
-  // Default to South Delhi so you see data even if GPS permission is off
   const lat = currentLocation?.latitude ?? 28.5319;
   const lng = currentLocation?.longitude ?? 77.2195;
 
@@ -50,9 +53,27 @@ export default function NearMeScreen() {
     router.push(`/(main)/dog/${dog.id}`);
   }, [router]);
 
+  const handleReportLost = useCallback(async (dog: Dog) => {
+    try {
+      await apiService.updateDog(dog.id, { is_lost: !dog.is_lost });
+      queryClient.invalidateQueries({ queryKey: ['dogs'] });
+    } catch {
+      // silent
+    }
+  }, [queryClient]);
+
+  const handleReportIssue = useCallback((dog: Dog) => {
+    router.push({ pathname: '/(main)/report/issue', params: { dog_id: dog.id } });
+  }, [router]);
+
   const renderDogCard = useCallback(({ item }: { item: Dog }) => (
-    <DogCard dog={item} onPress={handleDogPress} />
-  ), [handleDogPress]);
+    <SwipeableDogCard
+      dog={item}
+      onPress={handleDogPress}
+      onReportLost={handleReportLost}
+      onReportIssue={handleReportIssue}
+    />
+  ), [handleDogPress, handleReportLost, handleReportIssue]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -64,7 +85,7 @@ export default function NearMeScreen() {
             getCurrentLocation();
             refetch();
           }}>
-            <Text style={styles.refreshIcon}>🔄</Text>
+            <Ionicons name="refresh" size={20} color={colors.primary} />
           </TouchableOpacity>
         </View>
         <Text style={styles.location}>📍 {locationName || 'Getting location...'}</Text>
@@ -127,9 +148,11 @@ export default function NearMeScreen() {
           renderItem={renderDogCard}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          onRefresh={() => { getCurrentLocation(); refetch(); }}
+          refreshing={isLoading}
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>🐾</Text>
+              <Ionicons name="paw-outline" size={48} color={colors.border} />
               <Text style={styles.emptyText}>
                 {isLoading ? 'Loading dogs...' : 'No dogs found in this area'}
               </Text>
@@ -261,15 +284,12 @@ const styles = StyleSheet.create({
     padding: 60, 
     alignItems: 'center' 
   },
-  emptyIcon: {
-    fontSize: 48,
-    marginBottom: 12,
-  },
   emptyText: { 
     fontSize: 16, 
     fontWeight: '600',
     color: colors.text,
     textAlign: 'center',
+    marginTop: 12,
   },
   emptySubtext: {
     fontSize: 14,

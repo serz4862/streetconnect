@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { Dog } from '../../types';
 import { colors } from '../../constants';
+import { proxyImageUrl } from '../../services/imageProxy';
 
 const CARD_IMAGE_SIZE = 76;
 
@@ -40,7 +41,7 @@ const DogCard = memo<DogCardProps>(({ dog, onPress }) => {
       <View style={styles.imageWrap}>
         {dog.image_url ? (
           <Image
-            source={{ uri: dog.image_url }}
+            source={{ uri: proxyImageUrl(dog.image_url) }}
             style={styles.image}
             resizeMode="cover"
           />

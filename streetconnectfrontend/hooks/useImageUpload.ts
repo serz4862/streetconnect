@@ -1,6 +1,51 @@
 import { useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
-import { apiService } from '../services/api';
+import { storage } from '../services/storage';
+import Constants from 'expo-constants';
+
+const BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  Constants.expoConfig?.extra?.apiUrl ||
+  'http://localhost:3000/api/v1';
+
+/**
+ * Upload a local image URI directly to the backend via multipart/form-data.
+ * The backend then uploads to Supabase, bypassing ISP DNS issues with direct
+ * Supabase storage connections from the device.
+ */
+async function uploadToBackend(
+  imageUri: string,
+  folder: string,
+  fileType: string,
+): Promise<string> {
+  const token = await storage.getToken();
+
+  // Build multipart FormData — React Native's FormData accepts a file-like object
+  const formData = new FormData();
+  formData.append('file', {
+    uri: imageUri,
+    type: fileType,
+    name: `upload.${fileType.split('/')[1] || 'jpg'}`,
+  } as unknown as Blob);
+  formData.append('folder', folder);
+
+  const response = await fetch(`${BASE_URL}/upload/from-device`, {
+    method: 'POST',
+    headers: {
+      // Do NOT set Content-Type manually — fetch sets it with boundary for FormData
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error((errBody as any)?.error?.error || (errBody as any)?.message || `Upload failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.file_url as string;
+}
 
 export const useImageUpload = () => {
   const [isUploading, setIsUploading] = useState(false);
@@ -11,30 +56,17 @@ export const useImageUpload = () => {
     aspect?: [number, number];
     quality?: number;
   }): Promise<ImagePicker.ImagePickerAsset | null> => {
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        throw new Error('Permission to access media library denied');
-      }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') throw new Error('Permission to access media library denied');
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        // Use new API – array of MediaType strings to avoid deprecation warning
-        mediaTypes: ['images'],
-        allowsEditing: options?.allowsEditing ?? true,
-        aspect: options?.aspect ?? [4, 3],
-        quality: options?.quality ?? 0.8,
-      });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: options?.allowsEditing ?? true,
+      aspect: options?.aspect ?? [4, 3],
+      quality: options?.quality ?? 0.8,
+    });
 
-      if (!result.canceled && result.assets.length > 0) {
-        return result.assets[0];
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Error picking image:', error);
-      throw error;
-    }
+    return result.canceled || result.assets.length === 0 ? null : result.assets[0];
   };
 
   const takePhoto = async (options?: {
@@ -42,70 +74,37 @@ export const useImageUpload = () => {
     aspect?: [number, number];
     quality?: number;
   }): Promise<ImagePicker.ImagePickerAsset | null> => {
-    try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      
-      if (status !== 'granted') {
-        throw new Error('Permission to access camera denied');
-      }
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') throw new Error('Permission to access camera denied');
 
-      const result = await ImagePicker.launchCameraAsync({
-        // Explicitly restrict to images to match picker behaviour
-        mediaTypes: ['images'],
-        allowsEditing: options?.allowsEditing ?? true,
-        aspect: options?.aspect ?? [4, 3],
-        quality: options?.quality ?? 0.8,
-      });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: options?.allowsEditing ?? true,
+      aspect: options?.aspect ?? [4, 3],
+      quality: options?.quality ?? 0.8,
+    });
 
-      if (!result.canceled && result.assets.length > 0) {
-        return result.assets[0];
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Error taking photo:', error);
-      throw error;
-    }
+    return result.canceled || result.assets.length === 0 ? null : result.assets[0];
   };
 
   const uploadImage = async (
     imageUri: string,
-    folder: 'dogs' | 'reports' | 'feed' | 'chat' | 'qr' | 'avatars'
+    folder: 'dogs' | 'reports' | 'feed' | 'chat' | 'qr' | 'avatars',
   ): Promise<string> => {
     setIsUploading(true);
-    setProgress(0);
-
+    setProgress(10);
     try {
-      // Get file type from URI
-      const fileType = imageUri.endsWith('.png') ? 'image/png' : 'image/jpeg';
-
-      // Get signed upload URL
-      const uploadData: any = await apiService.getSignedUploadUrl(fileType, folder);
-      const { upload_url, file_url } = uploadData;
-
-      // Fetch the image as blob
-      const response = await fetch(imageUri);
-      const blob = await response.blob();
-
-      // Upload to S3
-      await apiService.uploadToS3(upload_url, blob);
-
+      const fileType = imageUri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+      const url = await uploadToBackend(imageUri, folder, fileType);
       setProgress(100);
-      setIsUploading(false);
-
-      return file_url;
+      return url;
     } catch (error) {
-      setIsUploading(false);
       console.error('Error uploading image:', error);
       throw error;
+    } finally {
+      setIsUploading(false);
     }
   };
 
-  return {
-    pickImage,
-    takePhoto,
-    uploadImage,
-    isUploading,
-    progress,
-  };
+  return { pickImage, takePhoto, uploadImage, isUploading, progress };
 };

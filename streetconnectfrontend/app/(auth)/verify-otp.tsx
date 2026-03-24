@@ -108,6 +108,16 @@ export default function VerifyOtpScreen() {
       else if (err?.error?.message) message = err.error.message;
       else if (typeof err?.error === 'string') message = err.error;
       else if (typeof err?.message === 'string') message = err.message;
+
+      if (err?.status === 404 || message.toLowerCase().includes('not found')) {
+        // User doesn't exist — redirect to signup
+        setError("Account not found. Redirecting to Sign Up...");
+        setShowErrorModal(false);
+        setTimeout(() => {
+          router.replace({ pathname: '/(auth)/signup' });
+        }, 1500);
+        return;
+      }
       if (err?.status === 403 && message.toLowerCase().includes('inactive')) {
         message = 'Your account was deactivated. Please contact support.';
       }
@@ -188,7 +198,7 @@ export default function VerifyOtpScreen() {
           ))}
         </View>
 
-        {error && !showErrorModal ? <Text style={styles.errorText}>{error}</Text> : null}
+        {error ? <Text style={[styles.errorText, error.includes('Redirecting') && styles.redirectText]}>{error}</Text> : null}
 
         <ErrorModal
           visible={showErrorModal}
@@ -271,7 +281,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   otpInputFilled: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  errorText: { color: colors.error, fontSize: 14, marginBottom: 12 },
+  errorText: { color: colors.error, fontSize: 14, marginBottom: 12, textAlign: 'center' },
+  redirectText: { color: colors.primary, fontWeight: '600' },
   resend: { marginTop: 20, textAlign: 'center', fontSize: 14, color: colors.textSecondary },
   resendLink: { color: colors.primary, fontWeight: '600' },
   resendDisabled: { color: colors.textLight },
