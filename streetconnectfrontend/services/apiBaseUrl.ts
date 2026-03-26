@@ -40,26 +40,29 @@ export function getApiBaseUrl(): string {
   const fromEnv = process.env.EXPO_PUBLIC_API_URL;
   if (fromEnv) return fromEnv;
 
-  // In dev, try to auto-resolve so the URL stays correct even without .env
+  // 2. In dev, auto-resolve from Metro's hostUri so it works without .env changes
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    // Android emulator cannot reach LAN via 127.0.0.1 – use the special alias
+    const host = autoDetectHost();
+
     if (Platform.OS === 'android') {
-      const host = autoDetectHost();
+      // Physical Android device: Metro host is the LAN IP – use it directly
       if (host && host !== 'localhost' && host !== '127.0.0.1') {
         return `http://${host}:${DEV_PORT}${API_PATH}`;
       }
+      // Android emulator: cannot reach host via 127.0.0.1, use special alias
       return `http://10.0.2.2:${DEV_PORT}${API_PATH}`;
     }
 
-    // iOS simulator / web can use loopback
-    if (Platform.OS !== 'ios') {
-      const host = autoDetectHost();
-      if (host) return `http://${host}:${DEV_PORT}${API_PATH}`;
+    // iOS physical device OR web: Metro host is the LAN IP – use it
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return `http://${host}:${DEV_PORT}${API_PATH}`;
     }
 
+    // iOS simulator / web localhost fallback
     return `http://127.0.0.1:${DEV_PORT}${API_PATH}`;
   }
 
+  // 3. Production: use app.json extra.apiUrl
   const fromExtra = Constants.expoConfig?.extra?.apiUrl as string | undefined;
   return fromExtra || `http://127.0.0.1:${DEV_PORT}${API_PATH}`;
 }
